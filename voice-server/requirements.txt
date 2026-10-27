@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+torch
+transformers
+soundfile
+numpy
+google-genai
+python-dotenv
+git+https://github.com/huggingface/parler-tts.git

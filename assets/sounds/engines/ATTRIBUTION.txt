@@ -1,0 +1,17 @@
+BenTown vehicle engine sounds
+
+car-engine-loop.wav
+- "racing car engine sound loops" by domasx2
+- CC0 1.0 (public domain dedication)
+- https://opengameart.org/content/racing-car-engine-sound-loops
+
+motorcycle-engine.mp3
+- Selected motorcycle engine recording from "Engines - Startup, Idle & Rev" by dklon
+- CC BY-SA 3.0; attribution required, derivatives shared under the same license
+- https://opengameart.org/content/engines-startup-idle-rev
+
+diesel-heavy-engine.mp3
+- "Engine-loop heavy vehicle/tank" by Nayckron, with qubodup
+- CC BY 3.0; attribution required
+- https://opengameart.org/content/engine-loop-heavy-vehicletank
+- Used for trucks and buses with separate playback-rate profiles.
