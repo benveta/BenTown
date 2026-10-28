@@ -199,6 +199,16 @@ export const GameScreen: React.FC = () => {
   const handleUpdateParentSettings = (updated: ParentSettings) => {
     setParentSettings(updated);
     storage.saveParentSettings(updated);
+    audio.setSoundEnabled(updated.soundEnabled);
+    audio.setSpeechEnabled(updated.speechEnabled);
+    audio.setMusicEnabled(updated.musicEnabled);
+  };
+
+  // One-tap master mute: everything off (effects, voice, music, engines) or everything back on.
+  const isMuted = !parentSettings.soundEnabled && !parentSettings.speechEnabled && !parentSettings.musicEnabled;
+  const toggleMute = () => {
+    const on = isMuted;
+    handleUpdateParentSettings({ ...parentSettings, soundEnabled: on, speechEnabled: on, musicEnabled: on });
   };
 
   // Reset character
@@ -298,6 +308,17 @@ export const GameScreen: React.FC = () => {
         onExitVehicle={() => engineRef.current?.exitVehicle()}
       />
 
+      {/* Master sound on/off, always visible */}
+      <TouchableOpacity
+        style={[styles.settingsBtn, styles.muteBtn]}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={isMuted ? 'Turn sound on' : 'Turn sound off'}
+        onPress={toggleMute}
+      >
+        <Ionicons name={isMuted ? 'volume-mute' : 'volume-high'} size={20} color={isMuted ? '#f2a0a0' : '#FFFFFF'} />
+      </TouchableOpacity>
+
       {/* Discreet Parent Settings Gear (Top Right) */}
       <TouchableOpacity
         style={styles.settingsBtn}
@@ -354,6 +375,9 @@ const styles = StyleSheet.create({
   },
   glView: {
     flex: 1,
+  },
+  muteBtn: {
+    right: 64,
   },
   settingsBtn: {
     position: 'absolute',

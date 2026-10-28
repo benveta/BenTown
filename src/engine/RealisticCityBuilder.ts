@@ -86,6 +86,8 @@ export class RealisticCityBuilder {
   private readonly ironwork = new THREE.MeshStandardMaterial({ color: 0x202528, roughness: 0.46, metalness: 0.66 });
 
   private anisotropy = 1;
+  /** Set by the WorldManager so parked vehicles can avoid tree trunks. */
+  public trunkBlocked?: (x: number, z: number, radius: number) => boolean;
 
   constructor(scene: THREE.Scene, anisotropy = 1) {
     this.scene = scene;
@@ -177,13 +179,15 @@ export class RealisticCityBuilder {
     parked.forEach(([id, name, key, color, position, rotation]) => {
       const model = VehicleModelLoader.create(key, color);
       const halfExtents = this.measure(model.group);
+      position = this.findClearSpot(position, rotation, halfExtents);
       model.group.position.set(...position);
       model.group.rotation.y = rotation;
       this.scene.add(model.group);
       this.vehicles.push({ id, name, group: model.group, wheels: model.wheels, type: 'roadster', seatOffset: new THREE.Vector3(0, 0.95, 0), active: false, speed: 0, steerAngle: rotation, halfExtents });
     });
     const motorcycle = this.createMotorcycle();
-    motorcycle.position.set(16, 0, 31);
+    const motorcycleSpot = this.findClearSpot([16, 0, 31], 0, { x: 0.45, z: 1.0 });
+    motorcycle.position.set(...motorcycleSpot);
     this.scene.add(motorcycle);
     this.vehicles.push({ id: 'night-district-motorcycle', name: 'Street Motorcycle', group: motorcycle, type: 'roadster', seatOffset: new THREE.Vector3(0, 0.9, 0), active: false, speed: 0, steerAngle: 0, halfExtents: { x: 0.45, z: 1.0 } });
 
@@ -275,6 +279,29 @@ export class RealisticCityBuilder {
     if (group.position[axis] > 96) group.position[axis] = -96;
     if (group.position[axis] < -96) group.position[axis] = 96;
     wheels.forEach((wheel) => { wheel.rotation.x -= direction * car.currentSpeed * delta / 0.35; });
+  }
+
+  /** Slides a parked vehicle along its axis until its whole footprint is clear of trees and buildings. */
+  private findClearSpot(position: [number, number, number], rotation: number, half: { x: number; z: number }): [number, number, number] {
+    const alongZ = Math.abs(Math.cos(rotation)) > 0.5;
+    const clear = (px: number, pz: number) => {
+      for (let a = -1; a <= 1; a += 0.5) {
+        for (let b = -1; b <= 1; b += 0.25) {
+          const lx = a * (half.x + 0.6);
+          const lz = b * (half.z + 0.6);
+          const x = px + lx * Math.cos(rotation) + lz * Math.sin(rotation);
+          const z = pz - lx * Math.sin(rotation) + lz * Math.cos(rotation);
+          if (this.isStaticBlocked(x, z, 0.1) || this.trunkBlocked?.(x, z, 0.2)) return false;
+        }
+      }
+      return true;
+    };
+    for (const shift of [0, 3, -3, 6, -6, 9, -9, 12, -12, 16, -16]) {
+      const px = alongZ ? position[0] : position[0] + shift;
+      const pz = alongZ ? position[2] + shift : position[2];
+      if (clear(px, pz)) return [px, position[1], pz];
+    }
+    return position;
   }
 
   private measure(group: THREE.Group) {

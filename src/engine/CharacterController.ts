@@ -252,11 +252,14 @@ export class CharacterController {
     this.state = 'drive';
   }
 
-  public setVehicleRiderMode(isRiding: boolean) {
-    // Keep Oshu's actual GLB visible while seated on a motorcycle, and hide
-    // the ground shadow that would otherwise float above the pavement.
-    this.group.visible = isRiding;
-    this.shadowMesh.visible = !isRiding;
+  /**
+   * `isRiding`: seated on an open vehicle (motorcycle) - the model stays visible and the ground
+   * shadow is hidden. `insideCar`: sitting inside a closed car - the whole character is hidden.
+   * Both false = walking: the character and its shadow MUST be visible again.
+   */
+  public setVehicleRiderMode(isRiding: boolean, insideCar = false) {
+    this.group.visible = !insideCar;
+    this.shadowMesh.visible = !(isRiding || insideCar);
     if (isRiding) {
       this.childModelGroup.rotation.y = 0;
       this.childModelGroup.rotation.x = -0.12;

@@ -12,6 +12,7 @@ function seeded(seed: number) {
   };
 }
 
+const VEHICLE_SPOTS: [number, number, number][] = [[16, 31, 5], [4, 2.5, 5], [40, 13, 5]];
 const GREENS = [0x3f7d3a, 0x4e8f3f, 0x2f6b34, 0x5a9a45, 0x376f3a, 0x6aa84f];
 const FLOWERS = [0xff5d73, 0xffd23f, 0xffffff, 0xb57bff, 0xff9f43, 0x4dc9ff];
 
@@ -36,6 +37,8 @@ export function buildGreenery(scene: THREE.Scene, isBlocked: Blocked) {
   const trees: { x: number; z: number; s: number }[] = [];
   const tryTree = (x: number, z: number, s: number, spacing = 3.2) => {
     if (isBlocked(x, z, 1.4) || onRoad(x, z, 1.3)) return;
+    // Keep trees and bushes away from fixed vehicle spawn points so they can always be reached.
+    if (VEHICLE_SPOTS.some(([sx, sz, r]) => (sx - x) ** 2 + (sz - z) ** 2 < r * r)) return;
     if (trees.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < spacing * spacing)) return;
     trees.push({ x, z, s });
   };

@@ -376,6 +376,31 @@ export class GameEngine {
     this.joystickVector = vector;
   }
 
+  /**
+   * Toddler-friendly: walking up to any vehicle and bumping into it gets the child in (the Drive
+   * button also works from ~3 m). A short cooldown after getting out prevents hopping straight back in.
+   */
+  private checkAutoEnterVehicle(delta: number) {
+    if (this.isDriving || this.isSliding || !this.world || Date.now() < this.enterCooldownUntil) {
+      this.autoEnterTimer = 0;
+      return;
+    }
+    const position = this.character.position;
+    const touching = this.world.vehicles.find((vehicle) => this.world.distanceToVehicleBody(vehicle, position.x, position.z) < 0.85);
+    // "Trying to move" counts too: collision zeroes the velocity while the child pushes against the body.
+    const pushing = Math.hypot(this.joystickVector?.x ?? 0, this.joystickVector?.y ?? 0) > 0.3 || !!this.character.targetDestination;
+    const moving = pushing || Math.hypot(this.character.velocity.x, this.character.velocity.z) > 0.3;
+    if (touching && moving) {
+      this.autoEnterTimer += delta;
+      if (this.autoEnterTimer > 0.35) {
+        this.autoEnterTimer = 0;
+        this.enterVehicle(touching);
+      }
+    } else {
+      this.autoEnterTimer = 0;
+    }
+  }
+
   // --- Vehicle Enter / Exit / Drive ---
   public enterVehicle(vehicle: any) {
     // A hijacked traffic car stops following its lane (it would otherwise resume driving off-road after exit).
@@ -383,6 +408,8 @@ export class GameEngine {
     this.activeVehicle = vehicle;
     vehicle.active = true;
     vehicle.group.userData.playerDriven = true;
+    // Forget the previous ride's recovery spots, otherwise a crash could send this vehicle there.
+    this.resetDriveAssist(vehicle);
     this.isDriving = true;
     this.autoDrive = false;
     vehicle.steerAngle = vehicle.group.rotation.y;
@@ -400,7 +427,7 @@ export class GameEngine {
       this.character.targetRotationY = 0;
       this.character.setVehicleRiderMode(true);
     } else {
-      this.character.setVehicleRiderMode(false);
+      this.character.setVehicleRiderMode(false, true);
     }
     audio.playHonk();
     audio.speak(`Vroom vroom! Driving the ${vehicle.name}! Let's go!`);
@@ -430,7 +457,10 @@ export class GameEngine {
     this.character.position.copy(exitPos);
     this.character.group.position.copy(exitPos);
     this.character.setVehicleRiderMode(false);
+    this.character.group.visible = true; // never leave the child invisible after getting out
     this.character.setWalkMode();
+    this.enterCooldownUntil = Date.now() + 2500; // do not hop straight back in
+    this.autoEnterTimer = 0;
 
     this.activeVehicle.active = false;
     this.isDriving = false;
@@ -514,6 +544,8 @@ export class GameEngine {
       this.character.update(delta, this.joystickVector, (x, z) => this.world.isPositionBlocked(x, z));
     }
 
+    this.checkAutoEnterVehicle(delta);
+
     const playerPos = this.isDriving && this.activeVehicle 
       ? this.activeVehicle.group.position 
       : this.character.position;
@@ -581,6 +613,8 @@ export class GameEngine {
   private blockedTime = 0;
   private lastOopsAt = 0;
   private throttleLock = false;
+  private autoEnterTimer = 0;
+  private enterCooldownUntil = 0;
   private recovery: { fromX: number; fromZ: number; toX: number; toZ: number; fromHeading: number; toHeading: number; t: number; duration: number } | null = null;
 
   private resetDriveAssist(vehicle: any) {
@@ -600,7 +634,7 @@ export class GameEngine {
     let toX: number;
     let toZ: number;
     let toHeading: number;
-    if (target && Math.hypot(target.x - here.x, target.z - here.z) > 1) {
+    if (target && Math.hypot(target.x - here.x, target.z - here.z) > 1 && Math.hypot(target.x - here.x, target.z - here.z) < 30) {
       toX = target.x;
       toZ = target.z;
       toHeading = target.heading;

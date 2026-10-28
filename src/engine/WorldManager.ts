@@ -102,11 +102,24 @@ export class WorldManager {
     return this.realisticBuilder.nearestRoadPoint(x, z);
   }
 
+  /** Distance from (x, z) to the nearest edge of the vehicle's footprint (0 when inside it). */
+  public distanceToVehicleBody(vehicle: { group: THREE.Group; halfExtents?: { x: number; z: number } }, x: number, z: number) {
+    const half = vehicle.halfExtents ?? { x: 1, z: 2 };
+    const dx = x - vehicle.group.position.x;
+    const dz = z - vehicle.group.position.z;
+    const cos = Math.cos(vehicle.group.rotation.y);
+    const sin = Math.sin(vehicle.group.rotation.y);
+    const lx = Math.abs(dx * cos - dz * sin);
+    const lz = Math.abs(dx * sin + dz * cos);
+    return Math.hypot(Math.max(lx - half.x, 0), Math.max(lz - half.z, 0));
+  }
+
   public releaseTrafficVehicle(vehicle: unknown) {
     this.realisticBuilder.releaseTrafficVehicle(vehicle as Parameters<RealisticCityBuilder['releaseTrafficVehicle']>[0]);
   }
 
   public async loadVehicleModels() {
+    this.realisticBuilder.trunkBlocked = (x, z, r) => this.isTrunkBlocked(x, z, r);
     await this.realisticBuilder.buildVehicles();
     await this.realisticBuilder.buildPedestrians();
     this.vehicles = this.realisticBuilder.getDriveableVehicles();
@@ -788,8 +801,9 @@ export class WorldManager {
     });
 
     this.vehicles.forEach((vh) => {
-      const dist = playerPos.distanceTo(vh.group.position);
-      if (dist < 6.0 && dist < minDistance) {
+      // Distance to the vehicle's body (not its centre) so long vehicles like the bus work too.
+      const dist = this.distanceToVehicleBody(vh, playerPos.x, playerPos.z);
+      if (dist < 3.2 && dist < minDistance) {
         minDistance = dist;
         closestTarget = {
           id: vh.id,
