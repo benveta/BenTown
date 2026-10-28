@@ -53,7 +53,11 @@ class AudioService {
 
   constructor() {
     // Without this iOS mutes every sound while the ring/silent switch is on.
-    void setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false, interruptionMode: 'mixWithOthers' }).catch(() => {});
+    try {
+      void setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false, interruptionMode: 'mixWithOthers' }).catch(() => {});
+    } catch {
+      // Audio mode is best-effort; never let it take the app down at launch.
+    }
     this.initWebAudio();
     this.voiceReady = this.loadPreferredVoice();
     this.startIdleCheerTimer();
