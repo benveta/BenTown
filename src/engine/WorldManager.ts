@@ -62,11 +62,16 @@ export class WorldManager {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    this.realisticBuilder = new RealisticCityBuilder(scene);
+  }
+
+  /** Loads textures from the bundle, then builds the city. */
+  public async init() {
+    await this.realisticBuilder.loadTextures();
     this.buildWorld();
   }
 
   private buildWorld() {
-    this.realisticBuilder = new RealisticCityBuilder(this.scene);
     const world = this.realisticBuilder.build();
     this.fixedCollisionBoxes = world.collisionBoxes;
     this.vehicles = world.vehicles;

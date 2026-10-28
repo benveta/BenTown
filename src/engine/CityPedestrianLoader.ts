@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinnedModel } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { CITY_NPC_MODELS_BASE64 } from '../assets/cityNpcModelsBase64';
+import { loadBinaryAsset } from './BinaryAsset';
+import { NPC_MODEL_FILES } from './binAssets';
 
-export type PedestrianModelKey = keyof typeof CITY_NPC_MODELS_BASE64;
+export type PedestrianModelKey = keyof typeof NPC_MODEL_FILES;
 
 export interface CityPedestrianNpc {
   id: string;
@@ -27,7 +28,7 @@ export class CityPedestrianLoader {
   private static readonly pending = new Map<PedestrianModelKey, Promise<PedestrianTemplate>>();
 
   public static async preloadAll() {
-    const keys = Object.keys(CITY_NPC_MODELS_BASE64) as PedestrianModelKey[];
+    const keys = Object.keys(NPC_MODEL_FILES) as PedestrianModelKey[];
     await Promise.all(keys.map((key) => this.load(key)));
   }
 
@@ -79,14 +80,9 @@ export class CityPedestrianLoader {
     const existing = this.pending.get(key);
     if (existing) return existing;
 
-    const task = new Promise<PedestrianTemplate>((resolve, reject) => {
-      try {
-        const encoded = CITY_NPC_MODELS_BASE64[key];
-        const binary = atob(encoded);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-        new GLTFLoader().parse(bytes.buffer, '', (gltf) => {
+    const task = loadBinaryAsset(NPC_MODEL_FILES[key]).then((buffer) =>
+      new Promise<PedestrianTemplate>((resolve, reject) => {
+        new GLTFLoader().parse(buffer, '', (gltf) => {
           const scene = gltf.scene;
           scene.updateMatrixWorld(true);
           const bounds = new THREE.Box3().setFromObject(scene);
@@ -95,10 +91,8 @@ export class CityPedestrianLoader {
           this.templates.set(key, template);
           resolve(template);
         }, reject);
-      } catch (error) {
-        reject(error);
-      }
-    });
+      })
+    );
     this.pending.set(key, task);
     task.finally(() => this.pending.delete(key));
     return task;

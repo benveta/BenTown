@@ -1,24 +1,6 @@
 import * as THREE from 'three';
-import { OFFICE_FACADE_RGBA_BASE64, STUCCO_RGBA_BASE64, STUCCO_SIZE } from '../assets/realisticTextures';
-import {
-  CITY_ENV_CITY_RGBA_BASE64,
-  CITY_ENV_DUSK_RGBA_BASE64,
-  CITY_ENV_FUEL_STOP_RGBA_BASE64,
-  CITY_ENV_HEIGHT,
-  CITY_ENV_MOUNTAIN_RGBA_BASE64,
-  CITY_ENV_WIDTH,
-} from '../assets/cityEnvironmentTexture';
-import { NYC_BODEGA_HEIGHT, NYC_BODEGA_RGBA_BASE64, NYC_BODEGA_WIDTH } from '../assets/nycBodegaTexture';
-import { NYC_FACADE_TEXTURE_HEIGHT, NYC_FACADE_TEXTURES_BASE64, NYC_FACADE_TEXTURE_WIDTH } from '../assets/nycFacadeTextures';
-import {
-  PHOTO_ASPHALT_ALBEDO_RGBA_BASE64,
-  PHOTO_ASPHALT_NORMAL_RGBA_BASE64,
-  PHOTO_ASPHALT_ROUGHNESS_RGBA_BASE64,
-  PHOTO_BRICK_ALBEDO_RGBA_BASE64,
-  PHOTO_BRICK_NORMAL_RGBA_BASE64,
-  PHOTO_BRICK_ROUGHNESS_RGBA_BASE64,
-  PHOTO_CITY_TEXTURE_SIZE,
-} from '../assets/photoCityTextures';
+import { loadBinaryAsset } from './BinaryAsset';
+import { FACADE_FILES, TEXTURE_FILES } from './binAssets';
 import { VehicleModelLoader, VehicleModelKey } from './VehicleModelLoader';
 import { CityPedestrianLoader, CityPedestrianNpc, PedestrianModelKey } from './CityPedestrianLoader';
 
@@ -50,6 +32,14 @@ export interface CityShop {
   position: THREE.Vector3;
 }
 
+const PHOTO_CITY_TEXTURE_SIZE = 512;
+const STUCCO_SIZE = 256;
+const BODEGA_WIDTH = 512;
+const BODEGA_HEIGHT = 216;
+const FACADE_TEXTURE_SIZE = 400;
+const CITY_ENV_WIDTH = 1024;
+const CITY_ENV_HEIGHT = 512;
+
 type CityBackdropZone = 'city' | 'dusk' | 'mountain' | 'fuelStop';
 
 export class RealisticCityBuilder {
@@ -59,18 +49,18 @@ export class RealisticCityBuilder {
   private readonly vehicles: DriveableVehicle[] = [];
   private readonly pedestrians: CityPedestrianNpc[] = [];
   private readonly shops: CityShop[] = [];
-  private readonly asphalt: THREE.DataTexture;
-  private readonly asphaltNormal: THREE.DataTexture;
-  private readonly asphaltRoughness: THREE.DataTexture;
-  private readonly groundTexture: THREE.DataTexture;
-  private readonly facade: THREE.DataTexture;
-  private readonly stucco: THREE.DataTexture;
-  private readonly environments: Record<CityBackdropZone, THREE.DataTexture>;
-  private readonly brownstone: THREE.DataTexture;
-  private readonly brownstoneNormal: THREE.DataTexture;
-  private readonly brownstoneRoughness: THREE.DataTexture;
-  private readonly bodega: THREE.DataTexture;
-  private readonly facadeTextures: THREE.DataTexture[];
+  private asphalt!: THREE.DataTexture;
+  private asphaltNormal!: THREE.DataTexture;
+  private asphaltRoughness!: THREE.DataTexture;
+  private groundTexture!: THREE.DataTexture;
+  private facade!: THREE.DataTexture;
+  private stucco!: THREE.DataTexture;
+  private environments!: Record<CityBackdropZone, THREE.DataTexture>;
+  private brownstone!: THREE.DataTexture;
+  private brownstoneNormal!: THREE.DataTexture;
+  private brownstoneRoughness!: THREE.DataTexture;
+  private bodega!: THREE.DataTexture;
+  private facadeTextures!: THREE.DataTexture[];
   private skyDome!: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   private facadeVariant = 0;
   private activeBackdrop: CityBackdropZone = 'city';
@@ -85,29 +75,43 @@ export class RealisticCityBuilder {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.asphalt = this.makeTexture(PHOTO_ASPHALT_ALBEDO_RGBA_BASE64, PHOTO_CITY_TEXTURE_SIZE, PHOTO_CITY_TEXTURE_SIZE, true);
-    this.asphaltNormal = this.makeTexture(PHOTO_ASPHALT_NORMAL_RGBA_BASE64, PHOTO_CITY_TEXTURE_SIZE, PHOTO_CITY_TEXTURE_SIZE, true, THREE.NoColorSpace);
-    this.asphaltRoughness = this.makeTexture(PHOTO_ASPHALT_ROUGHNESS_RGBA_BASE64, PHOTO_CITY_TEXTURE_SIZE, PHOTO_CITY_TEXTURE_SIZE, true, THREE.NoColorSpace);
-    this.groundTexture = this.makeGroundTexture();
-    this.facade = this.makeTexture(OFFICE_FACADE_RGBA_BASE64);
-    this.stucco = this.makeTexture(STUCCO_RGBA_BASE64, STUCCO_SIZE);
-    this.environments = {
-      city: this.makeEnvironment(CITY_ENV_CITY_RGBA_BASE64),
-      dusk: this.makeEnvironment(CITY_ENV_DUSK_RGBA_BASE64),
-      mountain: this.makeEnvironment(CITY_ENV_MOUNTAIN_RGBA_BASE64),
-      fuelStop: this.makeEnvironment(CITY_ENV_FUEL_STOP_RGBA_BASE64),
-    };
-    this.brownstone = this.makeTexture(PHOTO_BRICK_ALBEDO_RGBA_BASE64, PHOTO_CITY_TEXTURE_SIZE, PHOTO_CITY_TEXTURE_SIZE, true);
-    this.brownstoneNormal = this.makeTexture(PHOTO_BRICK_NORMAL_RGBA_BASE64, PHOTO_CITY_TEXTURE_SIZE, PHOTO_CITY_TEXTURE_SIZE, true, THREE.NoColorSpace);
-    this.brownstoneRoughness = this.makeTexture(PHOTO_BRICK_ROUGHNESS_RGBA_BASE64, PHOTO_CITY_TEXTURE_SIZE, PHOTO_CITY_TEXTURE_SIZE, true, THREE.NoColorSpace);
-    this.bodega = this.makeTexture(NYC_BODEGA_RGBA_BASE64, NYC_BODEGA_WIDTH, NYC_BODEGA_HEIGHT, true);
-    this.facadeTextures = NYC_FACADE_TEXTURES_BASE64.map((texture) =>
-      this.makeTexture(texture, NYC_FACADE_TEXTURE_WIDTH, NYC_FACADE_TEXTURE_HEIGHT, true)
-    );
   }
 
-  private makeEnvironment(encoded: string) {
-    const texture = this.makeTexture(encoded, CITY_ENV_WIDTH, CITY_ENV_HEIGHT, true);
+  /** Reads every texture from the bundle in parallel; must finish before build(). */
+  public async loadTextures() {
+    const read = (file: number) => loadBinaryAsset(file);
+    const [
+      asphalt, asphaltNormal, asphaltRoughness, brick, brickNormal, brickRoughness,
+      office, stucco, bodega, envCity, envDusk, envMountain, envFuelStop, ...facades
+    ] = await Promise.all([
+      read(TEXTURE_FILES.asphaltAlbedo), read(TEXTURE_FILES.asphaltNormal), read(TEXTURE_FILES.asphaltRoughness),
+      read(TEXTURE_FILES.brickAlbedo), read(TEXTURE_FILES.brickNormal), read(TEXTURE_FILES.brickRoughness),
+      read(TEXTURE_FILES.officeFacade), read(TEXTURE_FILES.stucco), read(TEXTURE_FILES.bodega),
+      read(TEXTURE_FILES.envCity), read(TEXTURE_FILES.envDusk), read(TEXTURE_FILES.envMountain), read(TEXTURE_FILES.envFuelStop),
+      ...FACADE_FILES.map(read),
+    ]);
+    const size = PHOTO_CITY_TEXTURE_SIZE;
+    this.asphalt = this.makeTexture(asphalt, size, size);
+    this.asphaltNormal = this.makeTexture(asphaltNormal, size, size, THREE.NoColorSpace);
+    this.asphaltRoughness = this.makeTexture(asphaltRoughness, size, size, THREE.NoColorSpace);
+    this.groundTexture = this.makeGroundTexture();
+    this.facade = this.makeTexture(office, 512, 512);
+    this.stucco = this.makeTexture(stucco, STUCCO_SIZE, STUCCO_SIZE);
+    this.environments = {
+      city: this.makeEnvironment(envCity),
+      dusk: this.makeEnvironment(envDusk),
+      mountain: this.makeEnvironment(envMountain),
+      fuelStop: this.makeEnvironment(envFuelStop),
+    };
+    this.brownstone = this.makeTexture(brick, size, size);
+    this.brownstoneNormal = this.makeTexture(brickNormal, size, size, THREE.NoColorSpace);
+    this.brownstoneRoughness = this.makeTexture(brickRoughness, size, size, THREE.NoColorSpace);
+    this.bodega = this.makeTexture(bodega, BODEGA_WIDTH, BODEGA_HEIGHT);
+    this.facadeTextures = facades.map((data) => this.makeTexture(data, FACADE_TEXTURE_SIZE, FACADE_TEXTURE_SIZE));
+  }
+
+  private makeEnvironment(data: ArrayBuffer) {
+    const texture = this.makeTexture(data, CITY_ENV_WIDTH, CITY_ENV_HEIGHT);
     // These source images are already full 2:1 equirectangular panoramas.
     // Keep one copy across the sphere; repeating them made the skyline appear
     // duplicated and much smaller when used as a background.
@@ -287,20 +291,9 @@ export class RealisticCityBuilder {
     });
   }
 
-  private makeTexture(encoded: string, width = 512, height = width, flipVertical = false, colorSpace: THREE.ColorSpace = THREE.SRGBColorSpace) {
-    const raw = atob(encoded);
-    const pixels = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) pixels[i] = raw.charCodeAt(i);
-    if (flipVertical) {
-      const rowBytes = width * 4;
-      const row = new Uint8Array(rowBytes);
-      for (let y = 0; y < height / 2; y++) {
-        const oppositeY = height - y - 1;
-        row.set(pixels.subarray(y * rowBytes, (y + 1) * rowBytes));
-        pixels.copyWithin(y * rowBytes, oppositeY * rowBytes, (oppositeY + 1) * rowBytes);
-        pixels.set(row, oppositeY * rowBytes);
-      }
-    }
+  /** Pixels are pre-flipped by the asset pipeline, so this only wraps the buffer. */
+  private makeTexture(data: ArrayBuffer, width: number, height: number, colorSpace: THREE.ColorSpace = THREE.SRGBColorSpace) {
+    const pixels = new Uint8Array(data);
     const texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat);
     texture.colorSpace = colorSpace;
     texture.wrapS = THREE.RepeatWrapping;

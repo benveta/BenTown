@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { CHILD_MODEL_BASE64 } from '../assets/childModelBase64';
+import { loadBinaryAsset } from './BinaryAsset';
+import { CHILD_MODEL_FILE } from './binAssets';
 import { OshuCustomization } from '../types/game';
 
 type CharacterMaterials = {
@@ -29,16 +30,10 @@ export class ChildHeadLoader {
     characterRoot.visible = false;
     this.customization = customization;
 
-    try {
-      const binaryString = atob(CHILD_MODEL_BASE64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-
+    loadBinaryAsset(CHILD_MODEL_FILE).then((buffer) => {
       const loader = new GLTFLoader();
       loader.parse(
-        bytes.buffer,
+        buffer,
         '',
         (gltf) => {
           this.materials = { hair: [], skin: [], shirt: [], pants: [], shoes: [] };
@@ -67,9 +62,9 @@ export class ChildHeadLoader {
           console.warn('Failed to parse child character GLB', error);
         }
       );
-    } catch (error) {
+    }).catch((error) => {
       console.warn('Failed to load child character GLB', error);
-    }
+    });
 
     return characterRoot;
   }

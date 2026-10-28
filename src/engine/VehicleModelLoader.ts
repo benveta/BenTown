@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { VEHICLE_MODELS_BASE64 } from '../assets/vehicleModelsBase64';
+import { loadBinaryAsset } from './BinaryAsset';
+import { VEHICLE_MODEL_FILES } from './binAssets';
 
 export type VehicleModelKey = 'sedan' | 'suv' | 'delivery-van' | 'pickup' | 'city-bus';
 
@@ -25,7 +26,7 @@ export class VehicleModelLoader {
   private static readonly pending = new Map<VehicleModelKey, Promise<THREE.Group>>();
 
   public static async preloadAll() {
-    const keys = Object.keys(VEHICLE_MODELS_BASE64) as VehicleModelKey[];
+    const keys = Object.keys(VEHICLE_MODEL_FILES) as VehicleModelKey[];
     await Promise.all(keys.map((key) => this.loadTemplate(key)));
   }
 
@@ -116,15 +117,10 @@ export class VehicleModelLoader {
     const inFlight = this.pending.get(key);
     if (inFlight) return inFlight;
 
-    const task = new Promise<THREE.Group>((resolve, reject) => {
-      try {
-        const encoded = VEHICLE_MODELS_BASE64[key];
-        const binary = atob(encoded);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
+    const task = loadBinaryAsset(VEHICLE_MODEL_FILES[key]).then((buffer) =>
+      new Promise<THREE.Group>((resolve, reject) => {
         new GLTFLoader().parse(
-          bytes.buffer,
+          buffer,
           '',
           (gltf) => {
             try {
@@ -137,10 +133,8 @@ export class VehicleModelLoader {
           },
           reject
         );
-      } catch (error) {
-        reject(error);
-      }
-    });
+      })
+    );
     this.pending.set(key, task);
     task.finally(() => this.pending.delete(key));
     return task;

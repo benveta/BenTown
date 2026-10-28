@@ -119,6 +119,7 @@ export class GameEngine {
 
   public async initWorld(): Promise<void> {
     this.world = new WorldManager(this.scene);
+    await this.world.init();
     await this.world.loadVehicleModels();
     this.renderer.shadowMap.needsUpdate = true;
     console.log('[GameEngine] World initialized with city models.');
