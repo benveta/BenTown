@@ -162,7 +162,7 @@ export class RealisticCityBuilder {
       this.vehicles.push({ id, name, group: model.group, wheels: model.wheels, type: 'roadster', seatOffset: new THREE.Vector3(0, 0.95, 0), active: false, speed: 0, steerAngle: 0, halfExtents: this.measure(model.group) });
     };
     addDriveable('city-sedan', 'City Sedan', 'sedan', 0x273b49, [4, 0, 2.5]);
-    addDriveable('fuel-stop-suv', 'Utility SUV', 'suv', 0x8d473a, [35, 0, 14.5]);
+    addDriveable('fuel-stop-suv', 'Utility SUV', 'suv', 0x8d473a, [40, 0, 13]);
     // Extra parked vehicles at the kerb along the main avenues and the park road,
     // so there is always something to hop into.
     const parked: [string, string, VehicleModelKey, number, [number, number, number], number][] = [
@@ -376,18 +376,36 @@ export class RealisticCityBuilder {
     // paths stay beside the curb and spread across the full playable town.
     // Add a second staggered wave around the central shopping streets.
     const pedestrianCount = 36;
-    for (let index = 0; index < pedestrianCount; index++) {
+    // Up to 3x as many candidates as walkers: routes that are blocked by buildings are skipped.
+    for (let index = 0; index < pedestrianCount * 3 && this.pedestrians.length < pedestrianCount; index++) {
       const routeIndex = index % routes.length;
       const route = routes[routeIndex];
       const wave = Math.floor(index / routes.length);
       const name = `${firstNames[index % firstNames.length]} ${String(index + 1).padStart(2, '0')}`;
+      // Each walker patrols only the stretch of sidewalk that is free of buildings, so it never
+      // walks into (or jitters against) a wall.
+      const blockedAt = (c: number) => route.axis === 'z' ? this.isStaticBlocked(route.fixed, c, 0.45) : this.isStaticBlocked(c, route.fixed, 0.45);
+      let progress = -84 + ((routeIndex * 47 + wave * 31) % 168);
+      if (blockedAt(progress)) {
+        let found: number | null = null;
+        for (let d = 1; d < 70 && found === null; d++) {
+          if (!blockedAt(progress + d)) found = progress + d;
+          else if (!blockedAt(progress - d)) found = progress - d;
+        }
+        if (found === null) continue;
+        progress = found;
+      }
+      let low = progress;
+      let high = progress;
+      while (high < 100 && !blockedAt(high + 0.5)) high += 0.5;
+      while (low > -100 && !blockedAt(low - 0.5)) low -= 0.5;
+      if (high - low < 8) continue; // too short a stretch to be worth a walker
       const pedestrian = CityPedestrianLoader.create(models[index % models.length], `ped-${index + 1}`, name);
-      const progress = -84 + ((routeIndex * 47 + wave * 31) % 168);
       if (route.axis === 'z') pedestrian.group.position.set(route.fixed, 0, progress);
       else pedestrian.group.position.set(progress, 0, route.fixed);
       pedestrian.axis = route.axis;
-      pedestrian.minCoordinate = -90;
-      pedestrian.maxCoordinate = 90;
+      pedestrian.minCoordinate = low + 0.6;
+      pedestrian.maxCoordinate = high - 0.6;
       pedestrian.direction = (index + routeIndex) % 2 === 0 ? 1 : -1;
       pedestrian.group.rotation.y = route.axis === 'z'
         ? (pedestrian.direction > 0 ? 0 : Math.PI)
@@ -450,18 +468,17 @@ export class RealisticCityBuilder {
       ahead[pedestrian.axis] += pedestrian.direction * 1.4;
       const waiting = this.isBlockedByVehicle(ahead.x, ahead.z, 0.5)
         || (!!playerPos && Math.hypot(ahead.x - playerPos.x, ahead.z - playerPos.z) < 0.9);
-      // Turn around at walls / props instead of walking through them.
-      if (this.isStaticBlocked(ahead.x, ahead.z, 0.35)) {
-        pedestrian.direction = pedestrian.direction === 1 ? -1 : 1;
-        pedestrian.group.rotation.y += Math.PI;
-        return;
-      }
       pedestrian.walkAction.paused = waiting;
       if (waiting) return;
       pedestrian.group.position[pedestrian.axis] += pedestrian.direction * pedestrian.speed * delta;
+      // Turn around at either end of the patrol. The position is clamped so a walker can never
+      // stay out of range and flip direction every frame.
       const coordinate = pedestrian.group.position[pedestrian.axis];
-      if (coordinate > pedestrian.maxCoordinate || coordinate < pedestrian.minCoordinate) {
-        pedestrian.direction = pedestrian.direction === 1 ? -1 : 1;
+      const atMax = coordinate >= pedestrian.maxCoordinate;
+      const atMin = coordinate <= pedestrian.minCoordinate;
+      if (atMax || atMin) {
+        pedestrian.group.position[pedestrian.axis] = atMax ? pedestrian.maxCoordinate : pedestrian.minCoordinate;
+        pedestrian.direction = atMax ? -1 : 1;
         pedestrian.group.rotation.y = pedestrian.axis === 'z'
           ? (pedestrian.direction > 0 ? 0 : Math.PI)
           : (pedestrian.direction > 0 ? Math.PI / 2 : -Math.PI / 2);

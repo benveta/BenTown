@@ -580,6 +580,7 @@ export class GameEngine {
   private steerIdle = 0;
   private blockedTime = 0;
   private lastOopsAt = 0;
+  private throttleLock = false;
   private recovery: { fromX: number; fromZ: number; toX: number; toZ: number; fromHeading: number; toHeading: number; t: number; duration: number } | null = null;
 
   private resetDriveAssist(vehicle: any) {
@@ -593,7 +594,8 @@ export class GameEngine {
   private startRecovery(vh: any) {
     const here = vh.group.position;
     // Prefer the oldest recent on-road position that is a few metres back; else the newest; else the nearest road.
-    const far = this.driveSamples.find((sample) => Math.hypot(sample.x - here.x, sample.z - here.z) >= 5);
+    // Newest on-road spot that is at least 4 m back (so it reverses only a short way).
+    const far = [...this.driveSamples].reverse().find((sample) => Math.hypot(sample.x - here.x, sample.z - here.z) >= 4);
     const target = far ?? this.driveSamples[this.driveSamples.length - 1];
     let toX: number;
     let toZ: number;
@@ -642,6 +644,7 @@ export class GameEngine {
       vh.speed = 0;
       this.recovery = null;
       this.blockedTime = 0;
+      this.throttleLock = Math.abs(this.joystickVector?.y ?? 0) > 0.05;
     }
   }
 
@@ -651,7 +654,13 @@ export class GameEngine {
       this.stepRecovery(vh, delta);
       return;
     }
-    const manualThrottle = this.joystickVector?.y ?? 0;
+    let manualThrottle = this.joystickVector?.y ?? 0;
+    // After a back-up, a button still held down is ignored until it is released, so the car
+    // does not bump straight into the same wall again.
+    if (this.throttleLock) {
+      if (Math.abs(manualThrottle) < 0.05) this.throttleLock = false;
+      else manualThrottle = 0;
+    }
     const throttle = Math.abs(manualThrottle) > 0.05 ? manualThrottle : this.autoDrive ? 0.65 : 0;
     const targetSpeed = throttle >= 0 ? throttle * 8.5 : throttle * 4.5;
     vh.speed = THREE.MathUtils.lerp(vh.speed, targetSpeed, delta * (Math.abs(throttle) > 0.05 ? 4 : 5));
@@ -663,27 +672,6 @@ export class GameEngine {
       // Three.js uses radians, so each button press adds a 30 degree yaw step.
       const reverseDirection = vh.speed < -0.05 ? -1 : 1;
       vh.steerAngle += direction * reverseDirection * (Math.PI / 6);
-    }
-
-    // Road assist: when the child is not steering, straighten along the road and drift into the lane.
-    if (Math.abs(vh.speed) > 0.8 && this.steerIdle > 0.6) {
-      const heading = vh.steerAngle;
-      const road = this.world.roadInfoAt(vh.group.position.x, vh.group.position.z, Math.abs(Math.sin(heading)) > Math.abs(Math.cos(heading)) ? 'x' : 'z');
-      if (road) {
-        const snapped = Math.round(heading / (Math.PI / 2)) * (Math.PI / 2);
-        let diff = snapped - heading;
-        diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-        vh.steerAngle += diff * Math.min(1, delta * 2.5);
-        if (Math.abs(diff) < 0.25) {
-          // Keep to the right-hand lane (same convention as the traffic).
-          const forwardAlong = road.axis === 'x' ? Math.sign(Math.sin(snapped)) : Math.sign(Math.cos(snapped));
-          const lane = road.axis === 'x' ? road.center + forwardAlong * 2.2 : road.center - forwardAlong * 2.2;
-          const current = road.axis === 'x' ? vh.group.position.z : vh.group.position.x;
-          const nudge = THREE.MathUtils.clamp(lane - current, -1.2 * delta, 1.2 * delta);
-          if (road.axis === 'x') vh.group.position.z += nudge;
-          else vh.group.position.x += nudge;
-        }
-      }
     }
 
     const forwardX = Math.sin(vh.steerAngle);
@@ -705,6 +693,15 @@ export class GameEngine {
 
     if (blocked) {
       vh.speed = THREE.MathUtils.lerp(vh.speed, 0, delta * 8);
+      // Only a solid obstacle (not a walking person) triggers the back-up.
+      const solid = [-1, 1].some((lengthSide) => [-1, 1].some((widthSide) =>
+        this.world.isPositionBlocked(
+          nextX + forwardX * halfLength * lengthSide + rightX * halfWidth * widthSide,
+          nextZ + forwardZ * halfLength * lengthSide + rightZ * halfWidth * widthSide,
+          0.18
+        ) && !this.world.isPositionBlocked(vh.group.position.x, vh.group.position.z, 0.1, vh.group)
+      ));
+      if (!solid) { this.blockedTime = 0; vh.group.rotation.y = vh.steerAngle; return; }
       // Pushing into something for a moment (or crashing at speed) triggers the automatic back-up.
       if (Math.abs(throttle) > 0.05 || Math.abs(vh.speed) > 1) this.blockedTime += delta;
       if (this.blockedTime > 0.25) {

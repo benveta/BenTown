@@ -190,7 +190,23 @@ export class CityPedestrianLoader {
       }
       tracks.push(new THREE.QuaternionKeyframeTrack(`${targetName}.quaternion`, Array.from(track.times), Array.from(values)));
     });
-    return new THREE.AnimationClip('walk', source.clip.duration, tracks);
+    // Measured in the running game: with this rig the retargeted legs swing backwards
+    // relative to the facing direction (a moonwalk), so play the cycle in reverse.
+    const duration = source.clip.duration;
+    const reversed = tracks.map((track) => {
+      const stride = track.getValueSize();
+      const count = track.times.length;
+      const times = new Array<number>(count);
+      const values = new Array<number>(count * stride);
+      for (let i = 0; i < count; i++) {
+        times[i] = duration - track.times[count - 1 - i];
+        for (let k = 0; k < stride; k++) values[i * stride + k] = track.values[(count - 1 - i) * stride + k];
+      }
+      return track instanceof THREE.QuaternionKeyframeTrack
+        ? new THREE.QuaternionKeyframeTrack(track.name, times, values)
+        : new THREE.VectorKeyframeTrack(track.name, times, values);
+    });
+    return new THREE.AnimationClip('walk', duration, reversed);
   }
 
   /**

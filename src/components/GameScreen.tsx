@@ -97,6 +97,8 @@ export const GameScreen: React.FC = () => {
   const onContextCreate = async (gl: ExpoWebGLRenderingContext) => {
     const engine = new GameEngine(gl, customization);
     engineRef.current = engine;
+    // Dev-only handle so scripted end-to-end checks can inspect the live game.
+    if (__DEV__) (globalThis as { __bentown?: GameEngine }).__bentown = engine;
     setIsWorldReady(false);
     setWorldError(null);
 
