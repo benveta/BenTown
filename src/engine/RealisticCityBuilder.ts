@@ -34,6 +34,7 @@ export interface CityShop {
 
 const PHOTO_CITY_TEXTURE_SIZE = 512;
 const SHADOW_MAP_SIZE = 2048;
+const FACADE_TILE_METERS = 7;
 const SHADOW_EXTENT = 46;
 const SUN_OFFSET = new THREE.Vector3(-34, 50, 22);
 const STUCCO_SIZE = 256;
@@ -529,23 +530,32 @@ export class RealisticCityBuilder {
 
   private addBuilding(x: number, z: number, width: number, depth: number, height: number, style: 'glass' | 'concrete' = 'glass', night = false) {
     const geometry = new THREE.BoxGeometry(width, height, depth);
-    const texture = this.facadeTextures[this.facadeVariant++ % this.facadeTextures.length].clone();
-    texture.needsUpdate = true;
-    texture.repeat.set(Math.max(1, width / 8), Math.max(1, height / 12));
-    const facadeMaterial = new THREE.MeshStandardMaterial({
-      map: texture,
-      color: 0xffffff,
-      roughness: style === 'glass' ? 0.42 : 0.9,
-      metalness: style === 'glass' ? 0.16 : 0.02,
-      emissive: night ? 0x192133 : 0x000000,
-      emissiveIntensity: night ? 0.52 : 0,
-    });
+    const source = this.facadeTextures[this.facadeVariant++ % this.facadeTextures.length];
+    // Each photo covers one FACADE_TILE_METERS square of wall. The old code used
+    // a single repeat for all four walls, so the narrower/wider side stretched
+    // the windows. Give every wall its own whole-number repeat from its real
+    // size (rounded, so the photo never cuts mid-window at a corner).
+    const facadeMaterial = (wallWidth: number) => {
+      const texture = source.clone();
+      texture.needsUpdate = true;
+      texture.repeat.set(Math.max(1, Math.round(wallWidth / FACADE_TILE_METERS)), Math.max(1, Math.round(height / FACADE_TILE_METERS)));
+      return new THREE.MeshStandardMaterial({
+        map: texture,
+        color: 0xffffff,
+        roughness: style === 'glass' ? 0.42 : 0.9,
+        metalness: style === 'glass' ? 0.16 : 0.02,
+        emissive: night ? 0x192133 : 0x000000,
+        emissiveIntensity: night ? 0.52 : 0,
+      });
+    };
+    const frontMaterial = facadeMaterial(width);
+    const sideMaterial = facadeMaterial(depth);
     const roofMaterial = this.material(style === 'glass' ? 0x354047 : 0x554b43, 0.88);
     // Keep the photo facade on the four vertical walls and give the roof a
     // solid finish so aerial angles never show stretched windows overhead.
     const body = this.addMesh(
       geometry,
-      [facadeMaterial, facadeMaterial, roofMaterial, roofMaterial, facadeMaterial, facadeMaterial],
+      [sideMaterial, sideMaterial, roofMaterial, roofMaterial, frontMaterial, frontMaterial],
       new THREE.Vector3(x, height / 2, z)
     );
     this.addMesh(new THREE.BoxGeometry(width + 0.5, 0.3, depth + 0.5), this.material(0x3a4145, 0.58, 0.24), new THREE.Vector3(x, 0.15, z));
