@@ -202,7 +202,9 @@ export const GameScreen: React.FC = () => {
     }
   };
 
-  const districtName = mapPosition.x < -24 && mapPosition.z > 0
+  const districtName = mapPosition.x > 112
+    ? 'LEARNING PARK'
+    : mapPosition.x < -24 && mapPosition.z > 0
     ? 'MOUNTAIN PASS'
     : mapPosition.x > 28 && mapPosition.z > 8
       ? 'FUEL STOP'

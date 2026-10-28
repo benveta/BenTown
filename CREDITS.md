@@ -5,3 +5,6 @@
 - Vehicle and earlier pedestrian models came from the Kenney asset packs (CC0).
 
 Binary assets in `assets/bin` were converted from their original files (images stripped to raw RGBA) by an offline bake step so they load on React Native.
+
+- `assets/fonts/helvetiker_bold.typeface.json`: Helvetiker font from the three.js examples (Copyright 2004 MAGENTA Ltd., permissive licence — keep this notice with the font).
+- `assets/sfx/*.wav`: generated procedurally by a script (no third-party audio).

@@ -1,5 +1,5 @@
 import * as Speech from 'expo-speech';
-import { createAudioPlayer } from 'expo-audio';
+import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import { Platform } from 'react-native';
 
 const indieVoiceBaseUrl = process.env.EXPO_PUBLIC_INDIE_VOICE_URL?.replace(/\/+$/, '');
@@ -11,6 +11,22 @@ const vehicleEngineAssets = {
   bus: require('../../assets/sounds/engines/diesel-heavy-engine.mp3'),
 } as const;
 type VehicleEngineType = keyof typeof vehicleEngineAssets;
+const sfxAssets = {
+  pop: require('../../assets/sfx/pop.wav'),
+  boing: require('../../assets/sfx/boing.wav'),
+  slide: require('../../assets/sfx/slide.wav'),
+  honk: require('../../assets/sfx/honk.wav'),
+  chime: require('../../assets/sfx/chime.wav'),
+  feed: require('../../assets/sfx/feed.wav'),
+  bgm: require('../../assets/sfx/bgm.wav'),
+  'note-C4': require('../../assets/sfx/note-C4.wav'),
+  'note-D4': require('../../assets/sfx/note-D4.wav'),
+  'note-E4': require('../../assets/sfx/note-E4.wav'),
+  'note-F4': require('../../assets/sfx/note-F4.wav'),
+  'note-G4': require('../../assets/sfx/note-G4.wav'),
+  'note-A4': require('../../assets/sfx/note-A4.wav'),
+  'note-B4': require('../../assets/sfx/note-B4.wav'),
+} as const;
 
 class AudioService {
   private soundEnabled: boolean = true;
@@ -32,8 +48,12 @@ class AudioService {
   private vehicleEnginePlayer: ReturnType<typeof createAudioPlayer> | null = null;
   private vehicleEngineType: VehicleEngineType | null = null;
   private vehicleEngineRate = 0;
+  private sfxPlayers = new Map<string, ReturnType<typeof createAudioPlayer>>();
+  private bgmPlayer: ReturnType<typeof createAudioPlayer> | null = null;
 
   constructor() {
+    // Without this iOS mutes every sound while the ring/silent switch is on.
+    void setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false, interruptionMode: 'mixWithOthers' }).catch(() => {});
     this.initWebAudio();
     this.voiceReady = this.loadPreferredVoice();
     this.startIdleCheerTimer();
@@ -210,7 +230,8 @@ class AudioService {
         if (this.vehicleEnginePlayer) this.vehicleEnginePlayer.playbackRate = targetRate;
       }
     }
-    if (x < -24 && z > 0) this.currentDistrict = 'the mountain pass';
+    if (x > 112) this.currentDistrict = 'the Learning Park';
+    else if (x < -24 && z > 0) this.currentDistrict = 'the mountain pass';
     else if (x > 28 && z > 8) this.currentDistrict = 'the fuel stop';
     else if (x > 28 && z < -16) this.currentDistrict = 'Ben Town Mall';
     else if (z > 28 && Math.abs(x) < 20) this.currentDistrict = 'the Night District';
@@ -287,6 +308,13 @@ class AudioService {
           'Look ahead, Oshu. What do you see on the street?',
           'Shall we take the next turn, Oshu, or keep going straight?',
         ]
+      : this.currentDistrict === 'the Learning Park'
+        ? [
+            'Oshu, tap a big letter and we can learn its sound!',
+            'Can you find the number five balloon, Oshu? Pop it!',
+            'Step on the rainbow stones, Oshu, and make music!',
+            'Oshu, can you say hello to the cow, the sheep and the duck?',
+          ]
       : this.currentDistrict === 'the mountain pass'
         ? [
             'Oshu, look at those big mountains! Which one is your favorite?',
@@ -327,223 +355,102 @@ class AudioService {
     this.speak(line);
   }
 
-  // --- Synthesized Sound Effects ---
+  // --- Sound effects (bundled WAVs: Web Audio is unavailable on iOS/Android) ---
+  private playSfx(key: keyof typeof sfxAssets, volume = 1) {
+    if (!this.soundEnabled) return;
+    try {
+      let player = this.sfxPlayers.get(key);
+      if (!player) {
+        player = createAudioPlayer(sfxAssets[key], { updateInterval: 1000 });
+        this.sfxPlayers.set(key, player);
+      }
+      player.volume = volume;
+      void player.seekTo(0);
+      player.play();
+    } catch (error) {
+      console.warn(`Could not play ${key}:`, error);
+    }
+  }
+
   public playXylophone(freq: number) {
-    if (!this.soundEnabled || !this.audioCtx) return;
-    this.ensureAudioContext();
-
-    try {
-      const now = this.audioCtx.currentTime;
-      const osc = this.audioCtx.createOscillator();
-      const gain = this.audioCtx.createGain();
-
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(freq, now);
-
-      gain.gain.setValueAtTime(0.4, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
-
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-
-      osc.start(now);
-      osc.stop(now + 1.2);
-    } catch {}
+    // Snap to the nearest of the seven recorded scale notes.
+    const notes: [keyof typeof sfxAssets, number][] = [
+      ['note-C4', 261.63], ['note-D4', 293.66], ['note-E4', 329.63], ['note-F4', 349.23],
+      ['note-G4', 392.0], ['note-A4', 440.0], ['note-B4', 493.88],
+    ];
+    const nearest = notes.reduce((best, note) => (Math.abs(note[1] - freq) < Math.abs(best[1] - freq) ? note : best));
+    this.playSfx(nearest[0], 0.8);
   }
 
-  public playPop() {
-    if (!this.soundEnabled || !this.audioCtx) return;
-    this.ensureAudioContext();
-
-    try {
-      const now = this.audioCtx.currentTime;
-      const osc = this.audioCtx.createOscillator();
-      const gain = this.audioCtx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(450, now);
-      osc.frequency.exponentialRampToValueAtTime(1200, now + 0.08);
-
-      gain.gain.setValueAtTime(0.45, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
-
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.14);
-    } catch {}
-  }
-
-  public playBoing() {
-    if (!this.soundEnabled || !this.audioCtx) return;
-    this.ensureAudioContext();
-
-    try {
-      const now = this.audioCtx.currentTime;
-      const osc = this.audioCtx.createOscillator();
-      const gain = this.audioCtx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(200, now);
-      osc.frequency.exponentialRampToValueAtTime(600, now + 0.22);
-      osc.frequency.exponentialRampToValueAtTime(320, now + 0.42);
-
-      gain.gain.setValueAtTime(0.4, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
-
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.45);
-    } catch {}
-  }
-
-  public playSlide() {
-    if (!this.soundEnabled || !this.audioCtx) return;
-    this.ensureAudioContext();
-
-    try {
-      const now = this.audioCtx.currentTime;
-      const osc = this.audioCtx.createOscillator();
-      const gain = this.audioCtx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(900, now);
-      osc.frequency.exponentialRampToValueAtTime(260, now + 0.65);
-
-      gain.gain.setValueAtTime(0.3, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
-
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.7);
-    } catch {}
-  }
-
-  public playHonk() {
-    if (!this.soundEnabled || !this.audioCtx) return;
-    this.ensureAudioContext();
-
-    try {
-      const now = this.audioCtx.currentTime;
-      [349.23, 440.00].forEach((freq) => {
-        const osc = this.audioCtx.createOscillator();
-        const gain = this.audioCtx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(freq, now);
-
-        gain.gain.setValueAtTime(0.22, now);
-        gain.gain.setValueAtTime(0.22, now + 0.18);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
-
-        osc.connect(gain);
-        gain.connect(this.audioCtx.destination);
-
-        osc.start(now);
-        osc.stop(now + 0.28);
-      });
-    } catch {}
-  }
-
-  public playChime() {
-    if (!this.soundEnabled || !this.audioCtx) return;
-    this.ensureAudioContext();
-
-    try {
-      const now = this.audioCtx.currentTime;
-      const chord = [523.25, 659.25, 783.99, 1046.50];
-      chord.forEach((freq, idx) => {
-        const osc = this.audioCtx.createOscillator();
-        const gain = this.audioCtx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
-
-        gain.gain.setValueAtTime(0.001, now);
-        gain.gain.setValueAtTime(0.28, now + idx * 0.08);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.8);
-
-        osc.connect(gain);
-        gain.connect(this.audioCtx.destination);
-
-        osc.start(now + idx * 0.08);
-        osc.stop(now + idx * 0.08 + 0.8);
-      });
-    } catch {}
-  }
+  public playPop() { this.playSfx('pop', 0.9); }
+  public playBoing() { this.playSfx('boing', 0.8); }
+  public playSlide() { this.playSfx('slide', 0.7); }
+  public playHonk() { this.playSfx('honk', 0.9); }
+  public playChime() { this.playSfx('chime', 0.7); }
+  public playFeed() { this.playSfx('feed', 0.6); }
 
   public playCheer() {
     this.playChime();
     this.speak('Yay Oshu! Awesome!');
   }
 
-  public playFeed() {
-    if (!this.soundEnabled || !this.audioCtx) return;
-    this.ensureAudioContext();
+  // --- Ambient traffic: the nearest car / truck / bus is heard, louder when closer ---
+  private trafficPlayers = new Map<VehicleEngineType, ReturnType<typeof createAudioPlayer>>();
+  private lastTrafficUpdate = 0;
 
-    try {
-      const now = this.audioCtx.currentTime;
-      for (let i = 0; i < 3; i++) {
-        const osc = this.audioCtx.createOscillator();
-        const gain = this.audioCtx.createGain();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(320 + i * 50, now + i * 0.1);
-
-        gain.gain.setValueAtTime(0.18, now + i * 0.1);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.1 + 0.08);
-
-        osc.connect(gain);
-        gain.connect(this.audioCtx.destination);
-
-        osc.start(now + i * 0.1);
-        osc.stop(now + i * 0.1 + 0.08);
+  public updateTrafficSound(listener: { x: number; z: number }, traffic: { x: number; z: number; speed: number; kind: VehicleEngineType }[]) {
+    const now = Date.now();
+    if (now - this.lastTrafficUpdate < 200) return;
+    this.lastTrafficUpdate = now;
+    (['car', 'truck', 'bus'] as VehicleEngineType[]).forEach((kind) => {
+      let nearest = Infinity;
+      let speed = 0;
+      traffic.forEach((vehicle) => {
+        if (vehicle.kind !== kind || vehicle.speed < 0.2) return;
+        const distance = Math.hypot(vehicle.x - listener.x, vehicle.z - listener.z);
+        if (distance < nearest) { nearest = distance; speed = vehicle.speed; }
+      });
+      const falloff = this.soundEnabled ? Math.max(0, 1 - nearest / 42) : 0;
+      const volume = falloff * falloff * (kind === 'car' ? 0.22 : 0.3);
+      let player = this.trafficPlayers.get(kind);
+      if (volume < 0.015) {
+        if (player?.playing) player.pause();
+        return;
       }
-    } catch {}
+      try {
+        if (!player) {
+          player = createAudioPlayer(vehicleEngineAssets[kind], { updateInterval: 1000 });
+          player.loop = true;
+          this.trafficPlayers.set(kind, player);
+        }
+        player.volume = volume;
+        player.playbackRate = (kind === 'car' ? 0.9 : 0.75) + Math.min(0.3, speed * 0.05);
+        if (!player.playing) player.play();
+      } catch (error) {
+        console.warn(`Traffic ${kind} sound failed:`, error);
+      }
+    });
   }
 
   // --- Background Nursery Melody ---
   public startBGM() {
-    if (!this.musicEnabled || !this.audioCtx || this.bgmInterval) return;
-    this.ensureAudioContext();
-
-    const notes = [
-      261.63, 261.63, 392.00, 392.00, 440.00, 440.00, 392.00,
-      349.23, 349.23, 329.63, 329.63, 293.66, 293.66, 261.63
-    ];
-    let noteIdx = 0;
-
-    this.bgmInterval = setInterval(() => {
-      if (!this.musicEnabled || !this.audioCtx) return;
-      try {
-        const freq = notes[noteIdx % notes.length];
-        noteIdx++;
-
-        const now = this.audioCtx.currentTime;
-        const osc = this.audioCtx.createOscillator();
-        const gain = this.audioCtx.createGain();
-
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(freq, now);
-
-        gain.gain.setValueAtTime(0.045, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
-
-        osc.connect(gain);
-        gain.connect(this.audioCtx.destination);
-
-        osc.start(now);
-        osc.stop(now + 0.6);
-      } catch {}
-    }, 750);
+    if (!this.musicEnabled || this.bgmPlayer) return;
+    try {
+      const player = createAudioPlayer(sfxAssets.bgm, { updateInterval: 1000 });
+      player.loop = true;
+      player.volume = 0.22;
+      this.bgmPlayer = player;
+      player.play();
+    } catch (error) {
+      console.warn('Could not start background music:', error);
+    }
   }
 
   public stopBGM() {
-    if (this.bgmInterval) {
-      clearInterval(this.bgmInterval);
-      this.bgmInterval = null;
+    if (this.bgmPlayer) {
+      this.bgmPlayer.pause();
+      this.bgmPlayer.remove();
+      this.bgmPlayer = null;
     }
   }
 }

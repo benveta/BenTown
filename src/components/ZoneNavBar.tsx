@@ -14,6 +14,7 @@ const DESTINATIONS = [
   { id: 'meadow', label: 'Mountain Pass', detail: 'Scenic highway', icon: 'arrow-back' },
   { id: 'garage', label: 'Fuel Stop', detail: 'Vehicles & pumps', icon: 'arrow-down' },
   { id: 'music', label: 'Night District', detail: 'Neon boulevard', icon: 'arrow-back' },
+  { id: 'learn', label: 'Learning Park', detail: 'ABC, numbers & animals', icon: 'arrow-forward' },
 ] as const;
 
 export const ZoneNavBar: React.FC<ZoneNavBarProps> = ({ onSelectZone }) => {

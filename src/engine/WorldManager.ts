@@ -11,6 +11,7 @@ import { haptics } from '../services/HapticsService';
 import { CityModelLoader } from './CityModelLoader';
 import { ProceduralCityGenerator } from './ProceduralCityGenerator';
 import { RealisticCityBuilder } from './RealisticCityBuilder';
+import { buildLearningPark } from './LearningPark';
 
 export class WorldManager {
   public scene: THREE.Scene;
@@ -75,6 +76,7 @@ export class WorldManager {
     const world = this.realisticBuilder.build();
     this.fixedCollisionBoxes = world.collisionBoxes;
     this.vehicles = world.vehicles;
+    buildLearningPark(this);
 
     // Legacy interaction groups stay off-map so only the new city and vehicles
     // participate in gameplay and proximity targeting.
@@ -97,11 +99,20 @@ export class WorldManager {
     return group;
   }
 
-  public isPositionBlocked(x: number, z: number, radius: number = 0.34): boolean {
+  /** `ignore` is the vehicle currently being driven (it must not block itself). */
+  /** Buildings and fixed props only (no vehicles) — used to keep scenery clear of structures. */
+  public isStaticBlocked(x: number, z: number, radius: number): boolean {
+    return this.fixedCollisionBoxes.some((box) =>
+      x + radius > box.min.x && x - radius < box.max.x && z + radius > box.min.z && z - radius < box.max.z);
+  }
+
+  public isPositionBlocked(x: number, z: number, radius: number = 0.34, ignore?: THREE.Object3D | null): boolean {
     const overlaps = (box: THREE.Box3) =>
       x + radius > box.min.x && x - radius < box.max.x &&
       z + radius > box.min.z && z - radius < box.max.z;
-    return (this.cityGen?.isPositionBlocked(x, z, radius) ?? false) || this.fixedCollisionBoxes.some(overlaps);
+    return (this.cityGen?.isPositionBlocked(x, z, radius) ?? false)
+      || this.fixedCollisionBoxes.some(overlaps)
+      || this.realisticBuilder.isBlockedByVehicle(x, z, radius, ignore);
   }
 
   public findNearestWalkablePosition(position: THREE.Vector3, searchRadius: number = 6): THREE.Vector3 {
@@ -1031,7 +1042,7 @@ export class WorldManager {
   }
 
   // --- Procedural Animal Models ---
-  private createAnimalModel(type: string, color: number): THREE.Group {
+  public createAnimalModel(type: string, color: number): THREE.Group {
     const group = new THREE.Group();
     const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.7 });
 
@@ -1070,7 +1081,7 @@ export class WorldManager {
     return group;
   }
 
-  private createCowModel(): THREE.Group {
+  public createCowModel(): THREE.Group {
     const group = new THREE.Group();
     const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
     const blackMat = new THREE.MeshStandardMaterial({ color: 0x1e293b });
@@ -1109,7 +1120,7 @@ export class WorldManager {
     return group;
   }
 
-  private createDuckModel(): THREE.Group {
+  public createDuckModel(): THREE.Group {
     const group = new THREE.Group();
     const yellowMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.5 });
     const orangeMat = new THREE.MeshStandardMaterial({ color: 0xf97316 });
@@ -1131,7 +1142,7 @@ export class WorldManager {
     return group;
   }
 
-  private createSheepModel(): THREE.Group {
+  public createSheepModel(): THREE.Group {
     const group = new THREE.Group();
     const woolMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.9 });
     const skinMat = new THREE.MeshStandardMaterial({ color: 0x334155 });
@@ -1156,7 +1167,7 @@ export class WorldManager {
     return group;
   }
 
-  private createCatModel(): THREE.Group {
+  public createCatModel(): THREE.Group {
     const group = new THREE.Group();
     const catMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.6 });
 
@@ -1264,6 +1275,7 @@ export class WorldManager {
   public update(delta: number, playerPos?: THREE.Vector3) {
     const t = Date.now() * 0.0015;
     this.realisticBuilder.update(delta, playerPos);
+    if (playerPos) audio.updateTrafficSound(playerPos, this.realisticBuilder.getTrafficSnapshot());
 
     // Stepping stones decay
     this.steppingStones.forEach((st) => {

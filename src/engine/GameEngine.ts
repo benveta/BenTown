@@ -132,6 +132,7 @@ export class GameEngine {
 
   public start() {
     this.isRunning = true;
+    audio.startBGM();
     this.lastTime = performance.now();
     this.loop(this.lastTime);
   }
@@ -190,6 +191,11 @@ export class GameEngine {
         targetX = 0;
         targetZ = 29;
         phrase = 'Night District';
+        break;
+      case 'learn':
+        targetX = 122;
+        targetZ = 0;
+        phrase = 'Learning Park';
         break;
     }
 
@@ -405,8 +411,16 @@ export class GameEngine {
   public exitVehicle() {
     if (!this.isDriving || !this.activeVehicle) return;
 
-    const exitPos = this.activeVehicle.group.position.clone();
-    exitPos.x += 1.8;
+    // Step out on the vehicle's right-hand side, then snap to open ground so the
+    // child never lands inside a wall or another vehicle.
+    const vehicle = this.activeVehicle;
+    const heading = vehicle.steerAngle;
+    const side = (vehicle.halfExtents?.x ?? 0.8) + 1.1;
+    const exitPos = vehicle.group.position.clone();
+    exitPos.x += Math.cos(heading) * side;
+    exitPos.z -= Math.sin(heading) * side;
+    exitPos.y = 0;
+    exitPos.copy(this.world.findNearestWalkablePosition(exitPos, 8));
     if (this.character.group.parent !== this.scene) this.scene.attach(this.character.group);
     this.character.group.scale.setScalar(1);
     this.character.group.rotation.set(0, 0, 0);
@@ -572,15 +586,16 @@ export class GameEngine {
     const forwardZ = Math.cos(vh.steerAngle);
     const nextX = vh.group.position.x + forwardX * vh.speed * delta;
     const nextZ = vh.group.position.z + forwardZ * vh.speed * delta;
-    const halfLength = vh.id === 'night-district-motorcycle' ? 1.1 : 1.7;
-    const halfWidth = vh.id === 'night-district-motorcycle' ? 0.42 : 0.74;
+    const halfLength = vh.halfExtents?.z ?? 1.7;
+    const halfWidth = vh.halfExtents?.x ?? 0.74;
     const rightX = forwardZ;
     const rightZ = -forwardX;
     const blocked = [-1, 1].some((lengthSide) => [-1, 1].some((widthSide) =>
       this.world.isPositionBlocked(
         nextX + forwardX * halfLength * lengthSide + rightX * halfWidth * widthSide,
         nextZ + forwardZ * halfLength * lengthSide + rightZ * halfWidth * widthSide,
-        0.18
+        0.18,
+        vh.group
       )
     ));
 
@@ -592,8 +607,8 @@ export class GameEngine {
     }
     vh.group.rotation.y = vh.steerAngle;
 
-    vh.group.position.x = Math.max(-100, Math.min(100, vh.group.position.x));
-    vh.group.position.z = Math.max(-100, Math.min(100, vh.group.position.z));
+    vh.group.position.x = Math.max(-200, Math.min(200, vh.group.position.x));
+    vh.group.position.z = Math.max(-200, Math.min(200, vh.group.position.z));
   }
 
   private updateCamera(targetPos: THREE.Vector3, delta: number) {

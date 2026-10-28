@@ -331,7 +331,7 @@ export class CharacterController {
     }
 
     // Resolve movement one axis at a time so the player slides along building walls.
-    const nextX = Math.max(-100, Math.min(100, this.position.x + this.velocity.x * delta));
+    const nextX = Math.max(-200, Math.min(200, this.position.x + this.velocity.x * delta));
     if (!isPositionBlocked || !isPositionBlocked(nextX, this.position.z)) {
       this.position.x = nextX;
     } else {
@@ -339,7 +339,7 @@ export class CharacterController {
       this.targetDestination = null;
     }
 
-    const nextZ = Math.max(-100, Math.min(100, this.position.z + this.velocity.z * delta));
+    const nextZ = Math.max(-200, Math.min(200, this.position.z + this.velocity.z * delta));
     if (!isPositionBlocked || !isPositionBlocked(this.position.x, nextZ)) {
       this.position.z = nextZ;
     } else {

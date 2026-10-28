@@ -14,6 +14,8 @@ export interface DriveableVehicle {
   speed: number;
   steerAngle: number;
   wheels?: THREE.Group[];
+  /** Half size of the body footprint in the vehicle's local x/z (used for collisions). */
+  halfExtents?: { x: number; z: number };
 }
 
 interface TrafficCar {
@@ -23,6 +25,10 @@ interface TrafficCar {
   direction: number;
   speed: number;
   wheels: THREE.Group[];
+  index: number;
+  kind: 'car' | 'truck' | 'bus';
+  currentSpeed: number;
+  blockedTime: number;
 }
 
 export interface CityShop {
@@ -36,6 +42,7 @@ const PHOTO_CITY_TEXTURE_SIZE = 512;
 const SHADOW_MAP_SIZE = 2048;
 const SKY_TINTS: Record<CityBackdropZone, number> = { city: 0xffffff, dusk: 0xb99cc4, mountain: 0xe6f1ff, fuelStop: 0xffd2b0 };
 const FACADE_TILE_METERS = 7;
+const LANE_OFFSET = 2.2;
 const SHADOW_EXTENT = 46;
 const SUN_OFFSET = new THREE.Vector3(-34, 50, 22);
 const STUCCO_SIZE = 256;
@@ -152,14 +159,14 @@ export class RealisticCityBuilder {
       const model = VehicleModelLoader.create(key, color);
       model.group.position.set(...position);
       this.scene.add(model.group);
-      this.vehicles.push({ id, name, group: model.group, wheels: model.wheels, type: 'roadster', seatOffset: new THREE.Vector3(0, 0.95, 0), active: false, speed: 0, steerAngle: 0 });
+      this.vehicles.push({ id, name, group: model.group, wheels: model.wheels, type: 'roadster', seatOffset: new THREE.Vector3(0, 0.95, 0), active: false, speed: 0, steerAngle: 0, halfExtents: this.measure(model.group) });
     };
     addDriveable('city-sedan', 'City Sedan', 'sedan', 0x273b49, [4, 0, 2.5]);
     addDriveable('fuel-stop-suv', 'Utility SUV', 'suv', 0x8d473a, [35, 0, 14.5]);
     const motorcycle = this.createMotorcycle();
     motorcycle.position.set(16, 0, 31);
     this.scene.add(motorcycle);
-    this.vehicles.push({ id: 'night-district-motorcycle', name: 'Street Motorcycle', group: motorcycle, type: 'roadster', seatOffset: new THREE.Vector3(0, 0.9, 0), active: false, speed: 0, steerAngle: 0 });
+    this.vehicles.push({ id: 'night-district-motorcycle', name: 'Street Motorcycle', group: motorcycle, type: 'roadster', seatOffset: new THREE.Vector3(0, 0.9, 0), active: false, speed: 0, steerAngle: 0, halfExtents: { x: 0.45, z: 1.0 } });
 
     // Leave the spawn junction open and distribute mixed traffic across the
     // longer avenues. The city bus, delivery vehicles, and private cars now
@@ -179,7 +186,12 @@ export class RealisticCityBuilder {
     traffic.forEach(({ x, z, axis, direction, speed, model, color, boxTruck }, index) => {
       const vehicle = VehicleModelLoader.create(model, color);
       if (boxTruck) this.addPickupBoxTruckCargo(vehicle.group);
-      vehicle.group.position.set(x, 0, z);
+      const halfExtents = this.measure(vehicle.group);
+      // Drive on the right: each direction gets its own lane so opposing
+      // vehicles pass side by side instead of through each other.
+      const laneZ = axis === 'x' ? Math.round(z / 24) * 24 + direction * LANE_OFFSET : z;
+      const laneX = axis === 'z' ? Math.round(x / 24) * 24 - direction * LANE_OFFSET : x;
+      vehicle.group.position.set(laneX, 0, laneZ);
       vehicle.group.rotation.y = axis === 'z' ? (direction > 0 ? 0 : Math.PI) : (direction > 0 ? Math.PI / 2 : -Math.PI / 2);
       this.scene.add(vehicle.group);
       const name = boxTruck ? 'Box Truck' : model === 'city-bus' ? 'City Bus' : model === 'delivery-van' ? 'Delivery Van' : model === 'pickup' ? 'Pickup Truck' : model === 'suv' ? 'City SUV' : 'City Car';
@@ -193,10 +205,92 @@ export class RealisticCityBuilder {
         active: false,
         speed: 0,
         steerAngle: vehicle.group.rotation.y,
+        halfExtents,
       };
       this.vehicles.push(trafficVehicle);
-      this.traffic.push({ group: vehicle.group, vehicle: trafficVehicle, axis, direction, speed, wheels: vehicle.wheels });
+      this.traffic.push({ group: vehicle.group, vehicle: trafficVehicle, axis, direction, speed, wheels: vehicle.wheels, index, kind: model === 'city-bus' ? 'bus' : boxTruck || model === 'delivery-van' || model === 'pickup' ? 'truck' : 'car', currentSpeed: speed, blockedTime: 0 });
     });
+  }
+
+  /**
+   * Drives one traffic car along its lane and brakes for anything in front:
+   * buildings/props, other vehicles, and the player on foot. Crossing traffic
+   * yields by index; after a long mutual stand-off the lower index goes first.
+   */
+  private updateTrafficCar(car: TrafficCar, delta: number, playerPos?: THREE.Vector3) {
+    const { group, vehicle, axis, direction, speed, wheels } = car;
+    if (vehicle.active || group.userData.playerDriven) return;
+    const half = vehicle.halfExtents ?? { x: 1, z: 2 };
+    // Axis-x cars face +/-x, so their body length lies along world x.
+    const length = half.z;
+    const width = half.x;
+    const dirX = axis === 'x' ? direction : 0;
+    const dirZ = axis === 'z' ? direction : 0;
+    let blocked = false;
+    let trafficBlocker: TrafficCar | null = null;
+    const lookAhead = [length + 1.0, length + 2.6, length + 4.6 + car.currentSpeed];
+    for (const distance of lookAhead) {
+      for (const lateral of [-width * 0.85, 0, width * 0.85]) {
+        const x = group.position.x + dirX * distance + dirZ * lateral;
+        const z = group.position.z + dirZ * distance + dirX * lateral;
+        if (this.isStaticBlocked(x, z, 0.15)) { blocked = true; break; }
+        const other = this.vehicleAt(x, z, 0.1, null, vehicle);
+        if (other) {
+          const otherTraffic = this.traffic.find((t) => t.vehicle === other) ?? null;
+          // After a stand-off, the lower index proceeds against another traffic car.
+          if (otherTraffic && car.blockedTime > 3 && car.index < otherTraffic.index) continue;
+          blocked = true;
+          trafficBlocker = otherTraffic;
+          break;
+        }
+        if (playerPos && Math.hypot(x - playerPos.x, z - playerPos.z) < 1.1) { blocked = true; break; }
+      }
+      if (blocked) break;
+    }
+    car.blockedTime = blocked ? car.blockedTime + delta : 0;
+    void trafficBlocker;
+    const target = blocked ? 0 : speed;
+    car.currentSpeed = THREE.MathUtils.lerp(car.currentSpeed, target, Math.min(1, delta * (blocked ? 6 : 1.4)));
+    if (car.currentSpeed < 0.02) car.currentSpeed = 0;
+    group.position[axis] += direction * car.currentSpeed * delta;
+    if (group.position[axis] > 96) group.position[axis] = -96;
+    if (group.position[axis] < -96) group.position[axis] = 96;
+    wheels.forEach((wheel) => { wheel.rotation.x -= direction * car.currentSpeed * delta / 0.35; });
+  }
+
+  private measure(group: THREE.Group) {
+    group.updateMatrixWorld(true);
+    const size = new THREE.Box3().setFromObject(group).getSize(new THREE.Vector3());
+    return { x: Math.max(0.4, size.x / 2), z: Math.max(0.6, size.z / 2) };
+  }
+
+  /** True when (x, z) with the given radius lies inside any vehicle's body footprint. */
+  public isBlockedByVehicle(x: number, z: number, radius: number, ignore?: THREE.Object3D | null) {
+    return this.vehicleAt(x, z, radius, ignore) !== null;
+  }
+
+  private vehicleAt(x: number, z: number, radius: number, ignore?: THREE.Object3D | null, skip?: DriveableVehicle) {
+    for (const vehicle of this.vehicles) {
+      if (vehicle === skip || vehicle.group === ignore || !vehicle.halfExtents) continue;
+      const { position, rotation } = vehicle.group;
+      const dx = x - position.x;
+      const dz = z - position.z;
+      const cos = Math.cos(rotation.y);
+      const sin = Math.sin(rotation.y);
+      const lx = dx * cos - dz * sin;
+      const lz = dx * sin + dz * cos;
+      if (Math.abs(lx) < vehicle.halfExtents.x + radius && Math.abs(lz) < vehicle.halfExtents.z + radius) return vehicle;
+    }
+    return null;
+  }
+
+  private isStaticBlocked(x: number, z: number, radius: number) {
+    return this.collisions.some((box) => x + radius > box.min.x && x - radius < box.max.x && z + radius > box.min.z && z - radius < box.max.z);
+  }
+
+  /** Positions/speeds of moving traffic for the ambient engine-sound mixer. */
+  public getTrafficSnapshot() {
+    return this.traffic.map((car) => ({ x: car.group.position.x, z: car.group.position.z, speed: car.currentSpeed, kind: car.kind }));
   }
 
   public getDriveableVehicles() {
@@ -207,12 +301,15 @@ export class RealisticCityBuilder {
     await CityPedestrianLoader.preloadAll();
     const models: PedestrianModelKey[] = ['rpm'];
     const firstNames = ['Mira', 'Arjun', 'Nila', 'Kabir', 'Anaya', 'Dev', 'Tara', 'Ishaan', 'Asha', 'Ravi', 'Riya', 'Aarav'];
-    const roads = [-84, -60, -36, -12, 12, 36, 60, 84];
+    // Sidewalks run beside the real avenue grid (every 24 m; the centre avenues
+    // are wider). The old list used block centres, so walkers cut through buildings.
+    const roads = [-96, -72, -48, -24, 0, 24, 48, 72, 96];
     const routes: { axis: 'x' | 'z'; fixed: number }[] = [];
     roads.forEach((road) => {
+      const sidewalk = road === 0 ? 7.4 : 5.4;
       [-1, 1].forEach((side) => {
-        routes.push({ axis: 'z', fixed: road + side * 6.2 });
-        routes.push({ axis: 'x', fixed: road + side * 6.2 });
+        routes.push({ axis: 'z', fixed: road + side * sidewalk });
+        routes.push({ axis: 'x', fixed: road + side * sidewalk });
       });
     });
 
@@ -274,13 +371,7 @@ export class RealisticCityBuilder {
       this.sunLight.target.position.set(sx, 0, sz);
       this.sunLight.position.set(sx + SUN_OFFSET.x, SUN_OFFSET.y, sz + SUN_OFFSET.z);
     }
-    this.traffic.forEach(({ group, vehicle, axis, direction, speed, wheels }) => {
-      if (vehicle.active || group.userData.playerDriven) return;
-      group.position[axis] += direction * speed * delta;
-      if (group.position[axis] > 96) group.position[axis] = -96;
-      if (group.position[axis] < -96) group.position[axis] = 96;
-      wheels.forEach((wheel) => { wheel.rotation.x -= direction * speed * delta / 0.35; });
-    });
+    this.traffic.forEach((car) => this.updateTrafficCar(car, delta, playerPos));
     this.pedestrians.forEach((pedestrian) => {
       // Keep animations smooth near the player while avoiding dozens of
       // off-screen skeleton updates on mobile devices.
@@ -291,9 +382,23 @@ export class RealisticCityBuilder {
         if (pedestrian.greetingTimer === 0) {
           pedestrian.greetAction?.stop();
           pedestrian.walkAction.reset().play();
+          pedestrian.walkAction.paused = false;
         }
         return;
       }
+      // Pause for vehicles (at crossings) or the player right in front.
+      const ahead = pedestrian.group.position.clone();
+      ahead[pedestrian.axis] += pedestrian.direction * 1.4;
+      const waiting = this.isBlockedByVehicle(ahead.x, ahead.z, 0.5)
+        || (!!playerPos && Math.hypot(ahead.x - playerPos.x, ahead.z - playerPos.z) < 0.9);
+      // Turn around at walls / props instead of walking through them.
+      if (this.isStaticBlocked(ahead.x, ahead.z, 0.35)) {
+        pedestrian.direction = pedestrian.direction === 1 ? -1 : 1;
+        pedestrian.group.rotation.y += Math.PI;
+        return;
+      }
+      pedestrian.walkAction.paused = waiting;
+      if (waiting) return;
       pedestrian.group.position[pedestrian.axis] += pedestrian.direction * pedestrian.speed * delta;
       const coordinate = pedestrian.group.position[pedestrian.axis];
       if (coordinate > pedestrian.maxCoordinate || coordinate < pedestrian.minCoordinate) {
@@ -459,6 +564,22 @@ export class RealisticCityBuilder {
   }
 
   private buildGround() {
+    // A much larger lawn under and beyond the city so the world feels open and
+    // green all the way to the fog line (UVs scaled to keep the grass grain).
+    const lawnGeometry = new THREE.PlaneGeometry(560, 560);
+    const lawnUv = lawnGeometry.getAttribute('uv');
+    for (let i = 0; i < lawnUv.count; i++) lawnUv.setXY(i, lawnUv.getX(i) * 2.4, lawnUv.getY(i) * 2.4);
+    const lawn = this.addMesh(lawnGeometry, new THREE.MeshStandardMaterial({ map: this.groundTexture, roughness: 1 }), new THREE.Vector3(0, -0.2, 0));
+    lawn.rotation.x = -Math.PI / 2;
+    lawn.receiveShadow = true;
+    // The main avenue continues east into the Learning Park.
+    const extensionGeometry = new THREE.PlaneGeometry(100, 12);
+    const extensionUv = extensionGeometry.getAttribute('uv');
+    for (let i = 0; i < extensionUv.count; i++) extensionUv.setXY(i, extensionUv.getX(i) * 100 / 5, extensionUv.getY(i) * 12 / 5);
+    const extension = this.addMesh(extensionGeometry, this.roadMaterial(), new THREE.Vector3(158, 0.015, 0));
+    extension.castShadow = false;
+    lawn.castShadow = false;
+    extension.rotation.x = -Math.PI / 2;
     const ground = this.addMesh(
       new THREE.PlaneGeometry(240, 240),
       new THREE.MeshStandardMaterial({ map: this.groundTexture, roughness: 1 }),
@@ -639,11 +760,12 @@ export class RealisticCityBuilder {
     });
     // A second ring of towers and offices makes the city continue beyond the
     // original downtown blocks instead of ending at the first avenue loop.
-    const outerOffsets = [-56, -28, 0, 28, 56];
+    // Blocks sit between avenues every 24 m, so their centres are at +/-12, 36, 60.
+    const outerOffsets = [-60, -36, -12, 12, 36, 60];
     outerOffsets.forEach((offset, index) => {
       this.addBuilding(-84, offset, 8, 8, 20 + (index % 3) * 5, index % 2 ? 'concrete' : 'glass', index % 2 === 0);
       this.addBuilding(84, offset, 8, 8, 24 + ((index + 1) % 3) * 5, index % 2 ? 'glass' : 'concrete', index % 2 === 1);
-      if (offset !== 28) {
+      {
         this.addBuilding(offset, -84, 8, 8, 18 + ((index + 2) % 4) * 4, index % 2 ? 'concrete' : 'glass', index % 2 === 0);
         this.addBuilding(offset, 84, 8, 8, 21 + (index % 4) * 4, index % 2 ? 'glass' : 'concrete', index % 2 === 1);
       }
@@ -655,8 +777,9 @@ export class RealisticCityBuilder {
 
   private buildSuburbs() {
     const lots: [number, number, number][] = [
-      [-33, -32, 0], [-33, -16, 1], [-33, -3, 2],
-      [-15, -32, 1], [-15, -16, 2], [-15, -3, 0],
+      // One row per city block (blocks are 16 m wide between avenues every 24 m).
+      [-33, -60, 0], [-33, -36, 1], [-33, -13, 2],
+      [-15, -60, 1], [-15, -36, 2], [-15, -13, 0],
     ];
     lots.forEach(([x, z, variant]) => {
       const width = 7.8;

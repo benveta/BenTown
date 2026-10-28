@@ -78,6 +78,9 @@ export class CityPedestrianLoader {
     walkAction.setLoop(THREE.LoopRepeat, Infinity);
     // Offset the cycle per walker so a crowd does not step in lockstep.
     walkAction.time = (id.length * 0.137 + name.charCodeAt(0) * 0.011) % template.walk.duration;
+    // Match stride rate to ground speed (the Mixamo walk covers ~1.35 m/s) to avoid foot sliding.
+    const speed = 0.92 + (id.length % 5) * 0.075;
+    walkAction.timeScale = speed / 1.35;
     walkAction.play();
 
     // Stand the posed model on y = 0.
@@ -93,7 +96,7 @@ export class CityPedestrianLoader {
       mixer,
       walkAction,
       greetAction: null,
-      speed: 0.92 + (id.length % 5) * 0.075,
+      speed,
       direction: id.length % 2 === 0 ? 1 : -1,
       axis: 'z',
       minCoordinate: -90,
