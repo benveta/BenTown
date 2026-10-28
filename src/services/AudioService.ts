@@ -80,7 +80,10 @@ class AudioService {
 
   public setSoundEnabled(val: boolean) {
     this.soundEnabled = val;
-    if (!val) this.stopVehicleEngine();
+    if (!val) {
+      this.stopVehicleEngine();
+      this.trafficPlayers.forEach((player) => { if (player.playing) player.pause(); });
+    }
     else if (this.isDriving && this.vehicleEngineType) this.startVehicleEngine(this.vehicleEngineType);
   }
 
@@ -257,7 +260,18 @@ class AudioService {
     }
   }
 
-  private stopVehicleEngine() {
+  /** Silence every vehicle sound and the music (app backgrounded / engine stopped). */
+  public pauseAll() {
+    this.stopVehicleEngine();
+    this.trafficPlayers.forEach((player) => { if (player.playing) player.pause(); });
+    this.stopBGM();
+  }
+
+  public resumeAll() {
+    if (this.musicEnabled) this.startBGM();
+  }
+
+  public stopVehicleEngine() {
     if (this.vehicleEnginePlayer) {
       this.vehicleEnginePlayer.pause();
       this.vehicleEnginePlayer.remove();
@@ -410,8 +424,9 @@ class AudioService {
         const distance = Math.hypot(vehicle.x - listener.x, vehicle.z - listener.z);
         if (distance < nearest) { nearest = distance; speed = vehicle.speed; }
       });
-      const falloff = this.soundEnabled ? Math.max(0, 1 - nearest / 42) : 0;
-      const volume = falloff * falloff * (kind === 'car' ? 0.22 : 0.3);
+      // Only vehicles within ~22 m are heard, and the player's own vehicle is exempt.
+      const falloff = this.soundEnabled && !this.isDriving ? Math.max(0, 1 - nearest / 22) : 0;
+      const volume = falloff * falloff * (kind === 'car' ? 0.14 : 0.2);
       let player = this.trafficPlayers.get(kind);
       if (volume < 0.015) {
         if (player?.playing) player.pause();

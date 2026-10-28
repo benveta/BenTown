@@ -161,6 +161,7 @@ export function buildLearningPark(world: WorldManager) {
   root.add(path);
 
   // --- Greenery for the whole world (trees, bushes) + flower beds in the park ---
-  const { random } = buildGreenery(scene, (x, z, r) => world.isStaticBlocked(x, z, r));
+  const { random, trees } = buildGreenery(scene, (x, z, r) => world.isStaticBlocked(x, z, r));
   buildFlowerBeds(scene, [[134, -6, 3], [150, 4, 3.5], [166, 6, 3], [180, 4, 4], [142, 24, 4], [160, 26, 3], [128, 10, 3]], random);
+  return trees;
 }

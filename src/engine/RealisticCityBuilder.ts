@@ -163,6 +163,25 @@ export class RealisticCityBuilder {
     };
     addDriveable('city-sedan', 'City Sedan', 'sedan', 0x273b49, [4, 0, 2.5]);
     addDriveable('fuel-stop-suv', 'Utility SUV', 'suv', 0x8d473a, [35, 0, 14.5]);
+    // Extra parked vehicles at the kerb along the main avenues and the park road,
+    // so there is always something to hop into.
+    const parked: [string, string, VehicleModelKey, number, [number, number, number], number][] = [
+      ['parked-taxi', 'City Taxi', 'sedan', 0xf2c230, [4.8, 0, -42], 0],
+      ['parked-van', 'Delivery Van', 'delivery-van', 0xe0e0dc, [-4.8, 0, -64], Math.PI],
+      ['parked-pickup', 'Pickup Truck', 'pickup', 0x2f6b9a, [4.8, 0, 54], 0],
+      ['parked-bus', 'School Bus', 'city-bus', 0xf0b323, [-4.8, 0, 78], Math.PI],
+      ['parked-suv', 'Family SUV', 'suv', 0x6c8f5a, [4.8, 0, -18], 0],
+      ['park-cruiser', 'Park Cruiser', 'sedan', 0xc0392b, [126, 0, -3.6], Math.PI / 2],
+      ['park-wagon', 'Park Wagon', 'suv', 0x3a6ea5, [140, 0, 3.6], -Math.PI / 2],
+    ];
+    parked.forEach(([id, name, key, color, position, rotation]) => {
+      const model = VehicleModelLoader.create(key, color);
+      const halfExtents = this.measure(model.group);
+      model.group.position.set(...position);
+      model.group.rotation.y = rotation;
+      this.scene.add(model.group);
+      this.vehicles.push({ id, name, group: model.group, wheels: model.wheels, type: 'roadster', seatOffset: new THREE.Vector3(0, 0.95, 0), active: false, speed: 0, steerAngle: rotation, halfExtents });
+    });
     const motorcycle = this.createMotorcycle();
     motorcycle.position.set(16, 0, 31);
     this.scene.add(motorcycle);
@@ -286,6 +305,46 @@ export class RealisticCityBuilder {
 
   private isStaticBlocked(x: number, z: number, radius: number) {
     return this.collisions.some((box) => x + radius > box.min.x && x - radius < box.max.x && z + radius > box.min.z && z - radius < box.max.z);
+  }
+
+  /** A traffic car the player takes over (or leaves) stops following its lane and becomes a parked vehicle. */
+  public releaseTrafficVehicle(vehicle: DriveableVehicle) {
+    const index = this.traffic.findIndex((car) => car.vehicle === vehicle);
+    if (index >= 0) this.traffic.splice(index, 1);
+  }
+
+  /** True when a pedestrian stands within `radius` of the point (used so driven vehicles stop for people). */
+  public isBlockedByPedestrian(x: number, z: number, radius: number) {
+    return this.pedestrians.some((p) => (p.group.position.x - x) ** 2 + (p.group.position.z - z) ** 2 < (radius + 0.45) ** 2);
+  }
+
+  /**
+   * The paved road under (x, z), if any. When `preferAxis` is given and the point is
+   * at a junction, the road running along that axis wins ('x' = runs along world x).
+   */
+  public roadInfoAt(x: number, z: number, preferAxis?: 'x' | 'z'): { axis: 'x' | 'z'; center: number } | null {
+    let best: { axis: 'x' | 'z'; center: number } | null = null;
+    let bestScore = Infinity;
+    const consider = (axis: 'x' | 'z', center: number, offset: number, half: number) => {
+      if (offset >= half) return;
+      const score = offset / half + (preferAxis && preferAxis !== axis ? 2 : 0);
+      if (score < bestScore) { bestScore = score; best = { axis, center }; }
+    };
+    for (let c = -96; c <= 96; c += 24) {
+      const half = c === 0 ? 6 : 4;
+      if (Math.abs(z) <= 108) consider('z', c, Math.abs(x - c), half);
+      if (Math.abs(x) <= 108) consider('x', c, Math.abs(z - c), half);
+    }
+    if (x >= 108 && x <= 208) consider('x', 0, Math.abs(z), 6);
+    return best;
+  }
+
+  /** Closest point on any road centre line, with the heading that follows it. */
+  public nearestRoadPoint(x: number, z: number) {
+    const snap = (value: number) => Math.max(-96, Math.min(96, Math.round(value / 24) * 24));
+    const onZ = { x: snap(x), z: Math.max(-104, Math.min(104, z)), heading: 0 };
+    const onX = { x: Math.max(-104, Math.min(104, x)), z: snap(z), heading: Math.PI / 2 };
+    return (onZ.x - x) ** 2 < (onX.z - z) ** 2 ? onZ : onX;
   }
 
   /** Positions/speeds of moving traffic for the ambient engine-sound mixer. */

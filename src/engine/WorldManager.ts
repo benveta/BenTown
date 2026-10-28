@@ -55,6 +55,8 @@ export class WorldManager {
   // Subtle floor rings identify places the player can interact with.
   private interactiveMarkers: THREE.Mesh[] = [];
   private fixedCollisionBoxes: THREE.Box3[] = [];
+  // Tree trunks bucketed in 8 m cells so collision checks stay cheap.
+  private treeCells = new Map<string, { x: number; z: number; s: number }[]>();
   private realisticBuilder!: RealisticCityBuilder;
 
   // Visual effects
@@ -76,7 +78,13 @@ export class WorldManager {
     const world = this.realisticBuilder.build();
     this.fixedCollisionBoxes = world.collisionBoxes;
     this.vehicles = world.vehicles;
-    buildLearningPark(this);
+    const trees = buildLearningPark(this);
+    trees.forEach((tree) => {
+      const key = `${Math.floor(tree.x / 8)},${Math.floor(tree.z / 8)}`;
+      const cell = this.treeCells.get(key) ?? [];
+      cell.push(tree);
+      this.treeCells.set(key, cell);
+    });
 
     // Legacy interaction groups stay off-map so only the new city and vehicles
     // participate in gameplay and proximity targeting.
@@ -84,6 +92,18 @@ export class WorldManager {
     this.slideGroup = this.createOffMapGroup();
     this.mirrorGroup = this.createOffMapGroup();
     this.bearGroup = this.createOffMapGroup();
+  }
+
+  public roadInfoAt(x: number, z: number, preferAxis?: 'x' | 'z') {
+    return this.realisticBuilder.roadInfoAt(x, z, preferAxis);
+  }
+
+  public nearestRoadPoint(x: number, z: number) {
+    return this.realisticBuilder.nearestRoadPoint(x, z);
+  }
+
+  public releaseTrafficVehicle(vehicle: unknown) {
+    this.realisticBuilder.releaseTrafficVehicle(vehicle as Parameters<RealisticCityBuilder['releaseTrafficVehicle']>[0]);
   }
 
   public async loadVehicleModels() {
@@ -106,13 +126,32 @@ export class WorldManager {
       x + radius > box.min.x && x - radius < box.max.x && z + radius > box.min.z && z - radius < box.max.z);
   }
 
+  private isTrunkBlocked(x: number, z: number, radius: number) {
+    const cx = Math.floor(x / 8);
+    const cz = Math.floor(z / 8);
+    for (let i = cx - 1; i <= cx + 1; i++) {
+      for (let j = cz - 1; j <= cz + 1; j++) {
+        const cell = this.treeCells.get(`${i},${j}`);
+        if (!cell) continue;
+        for (const tree of cell) {
+          const reach = radius + 0.25 * tree.s;
+          if ((tree.x - x) ** 2 + (tree.z - z) ** 2 < reach * reach) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   public isPositionBlocked(x: number, z: number, radius: number = 0.34, ignore?: THREE.Object3D | null): boolean {
     const overlaps = (box: THREE.Box3) =>
       x + radius > box.min.x && x - radius < box.max.x &&
       z + radius > box.min.z && z - radius < box.max.z;
     return (this.cityGen?.isPositionBlocked(x, z, radius) ?? false)
       || this.fixedCollisionBoxes.some(overlaps)
-      || this.realisticBuilder.isBlockedByVehicle(x, z, radius, ignore);
+      || this.isTrunkBlocked(x, z, radius)
+      || this.realisticBuilder.isBlockedByVehicle(x, z, radius, ignore)
+      // A driven vehicle (ignore is set) also stops for pedestrians.
+      || (!!ignore && this.realisticBuilder.isBlockedByPedestrian(x, z, radius));
   }
 
   public findNearestWalkablePosition(position: THREE.Vector3, searchRadius: number = 6): THREE.Vector3 {

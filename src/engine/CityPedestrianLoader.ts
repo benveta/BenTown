@@ -145,6 +145,32 @@ export class CityPedestrianLoader {
     const worldQuat = (object: THREE.Object3D) => object.getWorldQuaternion(new THREE.Quaternion());
     const tracks: THREE.KeyframeTrack[] = [];
     source.clip.tracks.forEach((track) => {
+      // Hips bob: keep only the movement around the mean (the walk is in place), converted
+      // to world metres, scaled by relative hip height, then into the target's local frame.
+      if (/Hips\.position$/.test(track.name)) {
+        const targetName = stripPrefix ? track.name.replace(/^mixamorig:?/, '') : track.name;
+        const hips = target.getObjectByName(targetName.replace('.position', ''));
+        const sourceHips = source.scene.getObjectByName(track.name.replace('.position', ''));
+        if (!hips?.parent || !sourceHips?.parent) return;
+        const sourceHeight = sourceHips.getWorldPosition(new THREE.Vector3()).y;
+        const targetHeight = hips.getWorldPosition(new THREE.Vector3()).y;
+        const ratio = sourceHeight > 0.01 ? targetHeight / sourceHeight : 1;
+        const toWorld = new THREE.Matrix3().setFromMatrix4(sourceHips.parent.matrixWorld);
+        const fromWorld = new THREE.Matrix3().setFromMatrix4(hips.parent.matrixWorld).invert();
+        const mean = new THREE.Vector3();
+        const count = track.values.length / 3;
+        for (let i = 0; i < track.values.length; i += 3) mean.add(new THREE.Vector3().fromArray(track.values, i));
+        mean.divideScalar(count);
+        const rest = hips.position.clone();
+        const values = new Float32Array(track.values.length);
+        const delta = new THREE.Vector3();
+        for (let i = 0; i < track.values.length; i += 3) {
+          delta.fromArray(track.values, i).sub(mean).applyMatrix3(toWorld).multiplyScalar(ratio).applyMatrix3(fromWorld);
+          rest.clone().add(delta).toArray(values, i);
+        }
+        tracks.push(new THREE.VectorKeyframeTrack(`${hips.name}.position`, Array.from(track.times), Array.from(values)));
+        return;
+      }
       if (!track.name.endsWith('.quaternion')) return;
       const sourceName = track.name.slice(0, -'.quaternion'.length);
       const targetName = stripPrefix ? sourceName.replace(/^mixamorig:?/, '') : sourceName;

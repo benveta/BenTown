@@ -21,17 +21,21 @@ const FLOWERS = [0xff5d73, 0xffd23f, 0xffffff, 0xb57bff, 0xff9f43, 0x4dc9ff];
  */
 export function buildGreenery(scene: THREE.Scene, isBlocked: Blocked) {
   const random = seeded(20241028);
+  // True on (or within `margin` of) any paved surface: the 24 m avenue grid
+  // (centre avenues are wider) and the avenue that leads into the Learning Park.
   const onRoad = (x: number, z: number, margin: number) => {
-    // Avenues every 24 m (centre avenues are wider) inside the city grid.
-    if (Math.abs(x) > 112 || Math.abs(z) > 112) return false;
-    const nearX = Math.abs(x - Math.round(x / 24) * 24) < margin + 4;
-    const nearZ = Math.abs(z - Math.round(z / 24) * 24) < margin + 4;
-    return nearX || nearZ;
+    for (let c = -96; c <= 96; c += 24) {
+      const half = (c === 0 ? 6 : 4) + margin;
+      if (Math.abs(x - c) < half && Math.abs(z) <= 110) return true;
+      if (Math.abs(z - c) < half && Math.abs(x) <= 110) return true;
+    }
+    return x >= 106 && x <= 212 && Math.abs(z) < 6 + margin;
   };
+  const inPark = (x: number, z: number) => x > 112 && x < 204 && z > -39 && z < 37;
 
   const trees: { x: number; z: number; s: number }[] = [];
   const tryTree = (x: number, z: number, s: number, spacing = 3.2) => {
-    if (isBlocked(x, z, 1.4)) return;
+    if (isBlocked(x, z, 1.4) || onRoad(x, z, 1.3)) return;
     if (trees.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < spacing * spacing)) return;
     trees.push({ x, z, s });
   };
@@ -55,10 +59,17 @@ export function buildGreenery(scene: THREE.Scene, isBlocked: Blocked) {
     const x = (random() - 0.5) * 420;
     const z = (random() - 0.5) * 420;
     if (Math.abs(x) < 114 && Math.abs(z) < 114) continue; // city
-    if (x > 114 && x < 206 && Math.abs(z) < 3) continue; // the road into the park
-    if (onRoad(x, z, 0)) continue;
+    if (inPark(x, z)) continue; // the park keeps its own layout (below)
     tryTree(x, z, 0.9 + random() * 0.7, 3.6);
   }
+
+  // Park border: a tree line around the learning area and a few shade trees by the benches.
+  for (let x = 118; x <= 202; x += 8) {
+    tryTree(x, -38.5, 1.1, 4);
+    tryTree(x, 36.5, 1.1, 4);
+  }
+  for (let z = -30; z <= 30; z += 8) tryTree(204, z, 1.1, 4);
+  [[144, -2], [168, 2], [136, 30], [190, 12], [152, -30]].forEach(([x, z]) => tryTree(x, z, 1.2, 4));
 
   // 3. Garden blocks inside the city: groves in the corners of open lots.
   for (let i = 0; i < 120; i++) {
@@ -108,7 +119,9 @@ export function buildGreenery(scene: THREE.Scene, isBlocked: Blocked) {
   // 4. Hedges / bushes along the same verges and around the park.
   const bushes: { x: number; z: number; s: number }[] = [];
   for (const tree of trees) {
-    if (random() < 0.55) bushes.push({ x: tree.x + (random() - 0.5) * 2.4, z: tree.z + (random() - 0.5) * 2.4, s: 0.5 + random() * 0.5 });
+    const bx = tree.x + (random() - 0.5) * 2.4;
+    const bz = tree.z + (random() - 0.5) * 2.4;
+    if (random() < 0.55 && !onRoad(bx, bz, 0.8) && !isBlocked(bx, bz, 0.6)) bushes.push({ x: bx, z: bz, s: 0.5 + random() * 0.5 });
   }
   const bushMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.7, 1), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true }), bushes.length);
   bushes.forEach((bush, i) => {
@@ -121,7 +134,7 @@ export function buildGreenery(scene: THREE.Scene, isBlocked: Blocked) {
   if (bushMesh.instanceColor) bushMesh.instanceColor.needsUpdate = true;
   scene.add(bushMesh);
 
-  return { trees, random, flowerColors: FLOWERS, isBlocked };
+  return { trees, random };
 }
 
 /** Flower beds as one InstancedMesh; `centers` are [x, z, radius] patches. */

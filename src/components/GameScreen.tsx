@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { 
   View, 
   StyleSheet, 
@@ -49,6 +50,15 @@ export const GameScreen: React.FC = () => {
   const [worldError, setWorldError] = useState<string | null>(null);
   const [canvasKey, setCanvasKey] = useState(0);
   const [mapPosition, setMapPosition] = useState({ x: 0, z: 0, heading: 0 });
+
+  // Silence music and vehicle sounds whenever the app leaves the foreground.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') audio.resumeAll();
+      else audio.pauseAll();
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     (async () => {

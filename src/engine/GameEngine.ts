@@ -139,6 +139,7 @@ export class GameEngine {
 
   public stop() {
     this.isRunning = false;
+    audio.pauseAll();
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
@@ -377,6 +378,8 @@ export class GameEngine {
 
   // --- Vehicle Enter / Exit / Drive ---
   public enterVehicle(vehicle: any) {
+    // A hijacked traffic car stops following its lane (it would otherwise resume driving off-road after exit).
+    this.world.releaseTrafficVehicle(vehicle);
     this.activeVehicle = vehicle;
     vehicle.active = true;
     vehicle.group.userData.playerDriven = true;
@@ -435,6 +438,7 @@ export class GameEngine {
     this.pendingVehicleTurns.length = 0;
     this.activeVehicle = null;
 
+    audio.stopVehicleEngine();
     audio.speak('Hop out! Great driving Oshu!');
     haptics.light();
 
@@ -568,18 +572,118 @@ export class GameEngine {
     this.animationFrameId = requestAnimationFrame(this.loop);
   };
 
+  // --- Toddler-friendly driving assists -------------------------------------
+  // 1. On a road the car straightens itself along the road and keeps to its lane.
+  // 2. Hitting a wall/prop/vehicle backs the car up to the last good spot on the road.
+  private driveSamples: { x: number; z: number; heading: number }[] = [];
+  private driveSampleTimer = 0;
+  private steerIdle = 0;
+  private blockedTime = 0;
+  private lastOopsAt = 0;
+  private recovery: { fromX: number; fromZ: number; toX: number; toZ: number; fromHeading: number; toHeading: number; t: number; duration: number } | null = null;
+
+  private resetDriveAssist(vehicle: any) {
+    this.driveSamples = [{ x: vehicle.group.position.x, z: vehicle.group.position.z, heading: vehicle.group.rotation.y }];
+    this.driveSampleTimer = 0;
+    this.steerIdle = 0;
+    this.blockedTime = 0;
+    this.recovery = null;
+  }
+
+  private startRecovery(vh: any) {
+    const here = vh.group.position;
+    // Prefer the oldest recent on-road position that is a few metres back; else the newest; else the nearest road.
+    const far = this.driveSamples.find((sample) => Math.hypot(sample.x - here.x, sample.z - here.z) >= 5);
+    const target = far ?? this.driveSamples[this.driveSamples.length - 1];
+    let toX: number;
+    let toZ: number;
+    let toHeading: number;
+    if (target && Math.hypot(target.x - here.x, target.z - here.z) > 1) {
+      toX = target.x;
+      toZ = target.z;
+      toHeading = target.heading;
+    } else {
+      const point = this.world.nearestRoadPoint(here.x, here.z);
+      toX = point.x;
+      toZ = point.z;
+      toHeading = point.heading;
+    }
+    // Face along the road: snap the heading to the nearest road axis.
+    toHeading = Math.round(toHeading / (Math.PI / 2)) * (Math.PI / 2);
+    const distance = Math.hypot(toX - here.x, toZ - here.z);
+    this.recovery = {
+      fromX: here.x, fromZ: here.z, toX, toZ,
+      fromHeading: vh.steerAngle, toHeading,
+      t: 0, duration: THREE.MathUtils.clamp(distance / 4, 0.9, 2.4),
+    };
+    const now = Date.now();
+    if (now - this.lastOopsAt > 7000) {
+      this.lastOopsAt = now;
+      audio.playBoing();
+      audio.speak("Oops! Bump! Let's back up and try again, Oshu!");
+      haptics.light();
+    }
+  }
+
+  private stepRecovery(vh: any, delta: number) {
+    const r = this.recovery!;
+    r.t = Math.min(1, r.t + delta / r.duration);
+    const e = r.t * r.t * (3 - 2 * r.t);
+    vh.group.position.x = THREE.MathUtils.lerp(r.fromX, r.toX, e);
+    vh.group.position.z = THREE.MathUtils.lerp(r.fromZ, r.toZ, e);
+    let diff = r.toHeading - r.fromHeading;
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    vh.steerAngle = r.fromHeading + diff * e;
+    vh.group.rotation.y = vh.steerAngle;
+    vh.speed = -3; // wheels roll backwards while it reverses
+    if (r.t >= 1) {
+      vh.steerAngle = r.toHeading;
+      vh.group.rotation.y = r.toHeading;
+      vh.speed = 0;
+      this.recovery = null;
+      this.blockedTime = 0;
+    }
+  }
+
   private updateVehiclePhysics(delta: number) {
     const vh = this.activeVehicle;
+    if (this.recovery) {
+      this.stepRecovery(vh, delta);
+      return;
+    }
     const manualThrottle = this.joystickVector?.y ?? 0;
     const throttle = Math.abs(manualThrottle) > 0.05 ? manualThrottle : this.autoDrive ? 0.65 : 0;
     const targetSpeed = throttle >= 0 ? throttle * 8.5 : throttle * 4.5;
     vh.speed = THREE.MathUtils.lerp(vh.speed, targetSpeed, delta * (Math.abs(throttle) > 0.05 ? 4 : 5));
 
+    if (this.pendingVehicleTurns.length > 0) this.steerIdle = 0;
+    else this.steerIdle += delta;
     while (this.pendingVehicleTurns.length > 0) {
       const direction = this.pendingVehicleTurns.shift()!;
       // Three.js uses radians, so each button press adds a 30 degree yaw step.
       const reverseDirection = vh.speed < -0.05 ? -1 : 1;
       vh.steerAngle += direction * reverseDirection * (Math.PI / 6);
+    }
+
+    // Road assist: when the child is not steering, straighten along the road and drift into the lane.
+    if (Math.abs(vh.speed) > 0.8 && this.steerIdle > 0.6) {
+      const heading = vh.steerAngle;
+      const road = this.world.roadInfoAt(vh.group.position.x, vh.group.position.z, Math.abs(Math.sin(heading)) > Math.abs(Math.cos(heading)) ? 'x' : 'z');
+      if (road) {
+        const snapped = Math.round(heading / (Math.PI / 2)) * (Math.PI / 2);
+        let diff = snapped - heading;
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+        vh.steerAngle += diff * Math.min(1, delta * 2.5);
+        if (Math.abs(diff) < 0.25) {
+          // Keep to the right-hand lane (same convention as the traffic).
+          const forwardAlong = road.axis === 'x' ? Math.sign(Math.sin(snapped)) : Math.sign(Math.cos(snapped));
+          const lane = road.axis === 'x' ? road.center + forwardAlong * 2.2 : road.center - forwardAlong * 2.2;
+          const current = road.axis === 'x' ? vh.group.position.z : vh.group.position.x;
+          const nudge = THREE.MathUtils.clamp(lane - current, -1.2 * delta, 1.2 * delta);
+          if (road.axis === 'x') vh.group.position.z += nudge;
+          else vh.group.position.x += nudge;
+        }
+      }
     }
 
     const forwardX = Math.sin(vh.steerAngle);
@@ -601,9 +705,25 @@ export class GameEngine {
 
     if (blocked) {
       vh.speed = THREE.MathUtils.lerp(vh.speed, 0, delta * 8);
+      // Pushing into something for a moment (or crashing at speed) triggers the automatic back-up.
+      if (Math.abs(throttle) > 0.05 || Math.abs(vh.speed) > 1) this.blockedTime += delta;
+      if (this.blockedTime > 0.25) {
+        this.startRecovery(vh);
+        return;
+      }
     } else {
+      this.blockedTime = 0;
       vh.group.position.x = nextX;
       vh.group.position.z = nextZ;
+      // Remember good on-road spots so a crash can return to one.
+      this.driveSampleTimer += delta;
+      if (this.driveSampleTimer > 0.4) {
+        this.driveSampleTimer = 0;
+        if (this.world.roadInfoAt(nextX, nextZ)) {
+          this.driveSamples.push({ x: nextX, z: nextZ, heading: vh.steerAngle });
+          if (this.driveSamples.length > 10) this.driveSamples.shift();
+        }
+      }
     }
     vh.group.rotation.y = vh.steerAngle;
 
