@@ -34,6 +34,7 @@ export interface CityShop {
 
 const PHOTO_CITY_TEXTURE_SIZE = 512;
 const SHADOW_MAP_SIZE = 2048;
+const SKY_TINTS: Record<CityBackdropZone, number> = { city: 0xffffff, dusk: 0xb99cc4, mountain: 0xe6f1ff, fuelStop: 0xffd2b0 };
 const FACADE_TILE_METERS = 7;
 const SHADOW_EXTENT = 46;
 const SUN_OFFSET = new THREE.Vector3(-34, 50, 22);
@@ -204,7 +205,7 @@ export class RealisticCityBuilder {
 
   public async buildPedestrians() {
     await CityPedestrianLoader.preloadAll();
-    const models: PedestrianModelKey[] = ['femaleA', 'femaleD', 'maleA', 'maleD'];
+    const models: PedestrianModelKey[] = ['rpm'];
     const firstNames = ['Mira', 'Arjun', 'Nila', 'Kabir', 'Anaya', 'Dev', 'Tara', 'Ishaan', 'Asha', 'Ravi', 'Riya', 'Aarav'];
     const roads = [-84, -60, -36, -12, 12, 36, 60, 84];
     const routes: { axis: 'x' | 'z'; fixed: number }[] = [];
@@ -218,7 +219,7 @@ export class RealisticCityBuilder {
     // Two walkers on each of the 32 sidewalks around the avenue grid. Their
     // paths stay beside the curb and spread across the full playable town.
     // Add a second staggered wave around the central shopping streets.
-    const pedestrianCount = 72;
+    const pedestrianCount = 36;
     for (let index = 0; index < pedestrianCount; index++) {
       const routeIndex = index % routes.length;
       const route = routes[routeIndex];
@@ -320,6 +321,32 @@ export class RealisticCityBuilder {
     return texture;
   }
 
+  private makeSkyGradient() {
+    const height = 128;
+    const pixels = new Uint8Array(height * 4);
+    const zenith = new THREE.Color(0x3f78c8);
+    const horizon = new THREE.Color(0xd4e2ee);
+    const color = new THREE.Color();
+    for (let y = 0; y < height; y++) {
+      // y = 0 is the bottom of the sphere (texture v = 0): haze at the horizon,
+      // deepening to blue overhead; below the horizon stays haze-coloured.
+      const v = y / (height - 1);
+      const t = Math.pow(Math.max(0, (v - 0.5) / 0.5), 0.7);
+      color.copy(horizon).lerp(zenith, t);
+      pixels[y * 4] = Math.round(color.r * 255);
+      pixels[y * 4 + 1] = Math.round(color.g * 255);
+      pixels[y * 4 + 2] = Math.round(color.b * 255);
+      pixels[y * 4 + 3] = 255;
+    }
+    const texture = new THREE.DataTexture(pixels, 1, height, THREE.RGBAFormat);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
   private makeGroundTexture() {
     const size = 256;
     const pixels = new Uint8Array(size * size * 4);
@@ -369,7 +396,10 @@ export class RealisticCityBuilder {
     this.scene.background = new THREE.Color(0x899bb2);
     this.skyDome = new THREE.Mesh(
       new THREE.SphereGeometry(150, 48, 32),
-      new THREE.MeshBasicMaterial({ map: this.environments.city, side: THREE.BackSide, depthWrite: false, fog: false })
+      // A clean procedural gradient replaces the low-resolution panorama on the
+      // dome: stretching a 1024x512 image over a 150 m sphere looked blurry.
+      // The panoramas still drive reflections through scene.environment.
+      new THREE.MeshBasicMaterial({ map: this.makeSkyGradient(), side: THREE.BackSide, depthWrite: false, fog: false })
     );
     this.skyDome.name = 'Generated city panorama sky dome';
     // SphereGeometry places its longitude seam on +Z; rotate it so the
@@ -379,7 +409,7 @@ export class RealisticCityBuilder {
     this.scene.add(this.skyDome);
     this.scene.environment = this.environments.city;
     this.scene.environmentIntensity = 0.55;
-    this.scene.fog = new THREE.Fog(0x7e8292, 86, 188);
+    this.scene.fog = new THREE.Fog(0xb4c3d2, 96, 190);
 
     this.hemisphereLight = new THREE.HemisphereLight(0x8599c4, 0x48382f, 0.92);
     this.ambientLight = new THREE.AmbientLight(0xc9ada0, 0.38);
@@ -411,8 +441,7 @@ export class RealisticCityBuilder {
 
     this.activeBackdrop = zone;
     const environment = this.environments[zone];
-    this.skyDome.material.map = environment;
-    this.skyDome.material.needsUpdate = true;
+    this.skyDome.material.color.setHex(SKY_TINTS[zone]);
     this.scene.environment = environment;
     const lighting = {
       city: { sky: 0x8599c4, ground: 0x48382f, hemi: 0.92, ambient: 0xc9ada0, ambientIntensity: 0.38, sun: 0xffefcf, sunIntensity: 1.85 },

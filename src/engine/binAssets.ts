@@ -39,10 +39,3 @@ export const VEHICLE_MODEL_FILES = {
   pickup: require('../../assets/bin/vehicle-pickup.glb'),
   'city-bus': require('../../assets/bin/vehicle-city-bus.glb'),
 } as const;
-
-export const NPC_MODEL_FILES = {
-  femaleA: require('../../assets/bin/npc-femaleA.glb'),
-  femaleD: require('../../assets/bin/npc-femaleD.glb'),
-  maleA: require('../../assets/bin/npc-maleA.glb'),
-  maleD: require('../../assets/bin/npc-maleD.glb'),
-} as const;
