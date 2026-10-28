@@ -60,9 +60,9 @@ export class WorldManager {
   private driftingClouds: THREE.Group[] = [];
   public particles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number }[] = [];
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, anisotropy = 1) {
     this.scene = scene;
-    this.realisticBuilder = new RealisticCityBuilder(scene);
+    this.realisticBuilder = new RealisticCityBuilder(scene, anisotropy);
   }
 
   /** Loads textures from the bundle, then builds the city. */

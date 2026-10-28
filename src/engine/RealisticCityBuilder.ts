@@ -33,6 +33,9 @@ export interface CityShop {
 }
 
 const PHOTO_CITY_TEXTURE_SIZE = 512;
+const SHADOW_MAP_SIZE = 2048;
+const SHADOW_EXTENT = 46;
+const SUN_OFFSET = new THREE.Vector3(-34, 50, 22);
 const STUCCO_SIZE = 256;
 const BODEGA_WIDTH = 512;
 const BODEGA_HEIGHT = 216;
@@ -73,8 +76,11 @@ export class RealisticCityBuilder {
   private readonly entryDoor = new THREE.MeshStandardMaterial({ color: 0x24343b, roughness: 0.55, metalness: 0.18 });
   private readonly ironwork = new THREE.MeshStandardMaterial({ color: 0x202528, roughness: 0.46, metalness: 0.66 });
 
-  constructor(scene: THREE.Scene) {
+  private anisotropy = 1;
+
+  constructor(scene: THREE.Scene, anisotropy = 1) {
     this.scene = scene;
+    this.anisotropy = anisotropy;
   }
 
   /** Reads every texture from the bundle in parallel; must finish before build(). */
@@ -259,6 +265,12 @@ export class RealisticCityBuilder {
     if (playerPos) {
       this.updateBackdrop(playerPos);
       this.skyDome.position.set(playerPos.x, 0, playerPos.z);
+      // Snap to shadow-map texels so shadow edges do not shimmer while walking.
+      const texel = (SHADOW_EXTENT * 2) / SHADOW_MAP_SIZE;
+      const sx = Math.round(playerPos.x / texel) * texel;
+      const sz = Math.round(playerPos.z / texel) * texel;
+      this.sunLight.target.position.set(sx, 0, sz);
+      this.sunLight.position.set(sx + SUN_OFFSET.x, SUN_OFFSET.y, sz + SUN_OFFSET.z);
     }
     this.traffic.forEach(({ group, vehicle, axis, direction, speed, wheels }) => {
       if (vehicle.active || group.userData.playerDriven) return;
@@ -301,6 +313,8 @@ export class RealisticCityBuilder {
     texture.generateMipmaps = true;
     texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.magFilter = THREE.LinearFilter;
+    // Sharper roads, brick and facades at grazing angles; cheap on A-series GPUs.
+    texture.anisotropy = this.anisotropy;
     texture.needsUpdate = true;
     return texture;
   }
@@ -372,12 +386,19 @@ export class RealisticCityBuilder {
     this.sunLight = new THREE.DirectionalLight(0xffefcf, 1.85);
     this.sunLight.position.set(-34, 50, 22);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.set(1024, 1024);
-    this.sunLight.shadow.camera.left = -112;
-    this.sunLight.shadow.camera.right = 112;
-    this.sunLight.shadow.camera.top = 112;
-    this.sunLight.shadow.camera.bottom = -112;
-    this.scene.add(this.sunLight);
+    // The shadow frustum follows the player (see update()), so a small area
+    // gets a dense shadow map: crisp contact shadows near the child and
+    // vehicles instead of one blurry map stretched over the whole city.
+    this.sunLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    this.sunLight.shadow.camera.left = -SHADOW_EXTENT;
+    this.sunLight.shadow.camera.right = SHADOW_EXTENT;
+    this.sunLight.shadow.camera.top = SHADOW_EXTENT;
+    this.sunLight.shadow.camera.bottom = -SHADOW_EXTENT;
+    this.sunLight.shadow.camera.near = 10;
+    this.sunLight.shadow.camera.far = 140;
+    this.sunLight.shadow.bias = -0.0004;
+    this.sunLight.shadow.normalBias = 0.04;
+    this.scene.add(this.sunLight, this.sunLight.target);
   }
 
   private updateBackdrop(position: THREE.Vector3) {

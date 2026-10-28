@@ -55,6 +55,13 @@ export class CityPedestrianLoader {
     const walkAction = mixer.clipAction(walk);
     walkAction.setLoop(THREE.LoopRepeat, Infinity);
     walkAction.play();
+    // The rest-pose bounds used by the template ignore the walk clip's root
+    // offset, which sank pedestrians into the pavement. Re-measure the posed
+    // skinned mesh and drop the model so its lowest vertex sits on y = 0.
+    mixer.update(0);
+    group.updateMatrixWorld(true);
+    const posed = new THREE.Box3().setFromObject(group, true);
+    if (Number.isFinite(posed.min.y)) model.position.y -= posed.min.y;
     const greet = template.clips.find((clip) => clip.name.toLowerCase() === 'emote-yes');
     const greetAction = greet ? mixer.clipAction(greet) : null;
 

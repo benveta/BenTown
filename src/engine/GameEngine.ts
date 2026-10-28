@@ -37,6 +37,7 @@ export class GameEngine {
   private animationFrameId: number | null = null;
   private lastTime: number = 0;
   private isRunning: boolean = false;
+  private frameCount = 0;
 
   // Inputs
   public joystickVector: { x: number; y: number } | null = null;
@@ -68,7 +69,10 @@ export class GameEngine {
     // 1. Renderer
     this.renderer = new THREE.WebGLRenderer({
       context: this.gl,
-      antialias: true,
+      // Phone screens are ~460 ppi: MSAA at full native resolution costs a lot
+      // of fill rate for almost no visible gain, so only enable it on
+      // lower-density / desktop surfaces.
+      antialias: Math.max(width, height) < 1900,
       powerPreference: 'high-performance',
     });
     // Expo GL already exposes a device-pixel drawing buffer; scaling it again
@@ -77,9 +81,10 @@ export class GameEngine {
     this.renderer.setSize(width, height, false);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.12;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // Moving shadow frustum: refreshed from the loop every other frame.
     this.renderer.shadowMap.autoUpdate = false;
 
     // 2. Scene
@@ -118,7 +123,7 @@ export class GameEngine {
   }
 
   public async initWorld(): Promise<void> {
-    this.world = new WorldManager(this.scene);
+    this.world = new WorldManager(this.scene, Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
     await this.world.init();
     await this.world.loadVehicleModels();
     this.renderer.shadowMap.needsUpdate = true;
@@ -505,6 +510,7 @@ export class GameEngine {
     // 2. Update World
     if (this.world) {
       this.world.update(delta, playerPos);
+      if ((this.frameCount++ & 1) === 0) this.renderer.shadowMap.needsUpdate = true;
     }
 
     // 3. Check Musical Stepping Stones
