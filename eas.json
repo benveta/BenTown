@@ -16,6 +16,12 @@
         "simulator": false
       }
     },
+    "android-apk": {
+      "extends": "preview",
+      "android": {
+        "buildType": "apk"
+      }
+    },
     "production": {
       "distribution": "store",
       "ios": {

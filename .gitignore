@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# leftover base64 assets (now bundled as assets/bin)
+src/assets/

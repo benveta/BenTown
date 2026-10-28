@@ -21,6 +21,8 @@ export interface CityPedestrianNpc {
   greetingTimer: number;
 }
 
+const PEDESTRIAN_HEIGHT = 1.72;
+
 type PedestrianTemplate = { scene: THREE.Group; clips: THREE.AnimationClip[]; scale: number; floorOffset: number };
 
 export class CityPedestrianLoader {
@@ -55,10 +57,25 @@ export class CityPedestrianLoader {
     const walkAction = mixer.clipAction(walk);
     walkAction.setLoop(THREE.LoopRepeat, Infinity);
     walkAction.play();
-    // The rest-pose bounds used by the template ignore the walk clip's root
-    // offset, which sank pedestrians into the pavement. Re-measure the posed
-    // skinned mesh and drop the model so its lowest vertex sits on y = 0.
+    // The source characters are chibi: oversized head, stubby limbs. Reshape
+    // the skeleton toward adult proportions (smaller head, longer legs, arms
+    // and torso) — the walk clip only animates rotations, so bone scales hold.
+    const reshape = (boneName: string, x: number, y: number, z: number) => model.getObjectByName(boneName)?.scale.set(x, y, z);
+    reshape('head', 0.72, 0.72, 0.72);
+    reshape('torso', 1, 1.22, 1);
+    reshape('leg-left', 0.85, 1.55, 0.85);
+    reshape('leg-right', 0.85, 1.55, 0.85);
+    reshape('arm-left', 0.85, 1.35, 0.85);
+    reshape('arm-right', 0.85, 1.35, 0.85);
+
+    // Measure the posed, reshaped skinned mesh: normalise to an adult height
+    // and stand it on y = 0 (the rest-pose bounds ignored the clip's root
+    // offset and the reshaping, which sank pedestrians into the pavement).
     mixer.update(0);
+    group.updateMatrixWorld(true);
+    const reshaped = new THREE.Box3().setFromObject(group, true);
+    const reshapedHeight = reshaped.max.y - reshaped.min.y;
+    if (reshapedHeight > 0.01) model.scale.multiplyScalar(PEDESTRIAN_HEIGHT / reshapedHeight);
     group.updateMatrixWorld(true);
     const posed = new THREE.Box3().setFromObject(group, true);
     if (Number.isFinite(posed.min.y)) model.position.y -= posed.min.y;
