@@ -1,0 +1,71 @@
+name: Build unsigned iPhone IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-unsigned-ipa:
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 26.4
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.4"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Generate iOS project
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: pod install
+
+      - name: Build unsigned iPhone archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME="$(node -p "require('./app.json').expo.name.replace(/[^A-Za-z0-9_]/g, '')")"
+          ARCHIVE_PATH="$RUNNER_TEMP/$APP_NAME.xcarchive"
+
+          xcodebuild \
+            -workspace "ios/$APP_NAME.xcworkspace" \
+            -scheme "$APP_NAME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+          APP_PATH="$ARCHIVE_PATH/Products/Applications/$APP_NAME.app"
+          test -d "$APP_PATH"
+
+          IPA_DIR="$RUNNER_TEMP/$APP_NAME-ipa"
+          mkdir -p "$IPA_DIR/Payload"
+          ditto "$APP_PATH" "$IPA_DIR/Payload/$APP_NAME.app"
+          (cd "$IPA_DIR" && /usr/bin/zip -qry "$GITHUB_WORKSPACE/$APP_NAME-unsigned.ipa" Payload)
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: BenTown-unsigned-iphone-ipa
+          path: BenTown-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
