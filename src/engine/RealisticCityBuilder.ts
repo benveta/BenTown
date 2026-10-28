@@ -402,7 +402,7 @@ export class RealisticCityBuilder {
     // Two walkers on each of the 32 sidewalks around the avenue grid. Their
     // paths stay beside the curb and spread across the full playable town.
     // Add a second staggered wave around the central shopping streets.
-    const pedestrianCount = 36;
+    const pedestrianCount = 28;
     // Up to 3x as many candidates as walkers: routes that are blocked by buildings are skipped.
     for (let index = 0; index < pedestrianCount * 3 && this.pedestrians.length < pedestrianCount; index++) {
       const routeIndex = index % routes.length;

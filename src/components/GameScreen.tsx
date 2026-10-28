@@ -48,6 +48,17 @@ export const GameScreen: React.FC = () => {
   const [parentGateVisible, setParentGateVisible] = useState<boolean>(false);
   const [isWorldReady, setIsWorldReady] = useState(false);
   const [worldError, setWorldError] = useState<string | null>(null);
+  const [loadStage, setLoadStage] = useState('Getting the streets and play areas ready');
+  const loadStageRef = useRef('starting');
+
+  // Watchdog: a stalled startup becomes a readable error (with the stage it stopped at) instead of an endless spinner.
+  useEffect(() => {
+    if (isWorldReady || worldError) return;
+    const timer = setTimeout(() => {
+      setWorldError(`Loading is taking too long (stopped at: ${loadStageRef.current}). Tap Try again.`);
+    }, 75000);
+    return () => clearTimeout(timer);
+  }, [isWorldReady, worldError]);
   const [canvasKey, setCanvasKey] = useState(0);
   const [mapPosition, setMapPosition] = useState({ x: 0, z: 0, heading: 0 });
 
@@ -101,6 +112,11 @@ export const GameScreen: React.FC = () => {
     if (__DEV__) (globalThis as { __bentown?: GameEngine }).__bentown = engine;
     setIsWorldReady(false);
     setWorldError(null);
+
+    engine.onLoadStage = (stage) => {
+      loadStageRef.current = stage;
+      setLoadStage(stage);
+    };
 
     engine.onTargetChange = (target) => {
       setCurrentTarget(target);
@@ -359,7 +375,7 @@ export const GameScreen: React.FC = () => {
             <View style={styles.loadingCard}>
               <ActivityIndicator size="large" color="#0E7490" />
               <Text style={styles.loadingTitle}>Opening BenTown…</Text>
-              <Text style={styles.loadingMessage}>Getting the streets and play areas ready</Text>
+              <Text style={styles.loadingMessage}>{loadStage}</Text>
             </View>
           )}
         </View>

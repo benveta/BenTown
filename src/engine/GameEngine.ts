@@ -44,6 +44,8 @@ export class GameEngine {
   private pendingVehicleTurns: number[] = [];
 
   // UI Callbacks
+  /** Startup progress text for the loading card. */
+  public onLoadStage?: (stage: string) => void;
   public onTargetChange?: (target: InteractiveTarget | null) => void;
   public onSpeechMessage?: (message: SpeechMessage) => void;
   public onOpenWardrobe?: () => void;
@@ -124,6 +126,7 @@ export class GameEngine {
 
   public async initWorld(): Promise<void> {
     this.world = new WorldManager(this.scene, Math.min(4, this.renderer.capabilities.getMaxAnisotropy()));
+    this.world.onStage = this.onLoadStage;
     await this.world.init();
     await this.world.loadVehicleModels();
     this.renderer.shadowMap.needsUpdate = true;

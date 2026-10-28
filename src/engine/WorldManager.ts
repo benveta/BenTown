@@ -70,8 +70,17 @@ export class WorldManager {
 
   /** Loads textures from the bundle, then builds the city. */
   public async init() {
+    await this.stage('Loading textures…');
     await this.realisticBuilder.loadTextures();
+    await this.stage('Building streets and buildings…');
     this.buildWorld();
+  }
+
+  /** Reports startup progress and yields to the UI so the loading card can repaint between heavy steps. */
+  public onStage?: (stage: string) => void;
+  private stage(text: string) {
+    this.onStage?.(text);
+    return new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 
   private buildWorld() {
@@ -120,7 +129,9 @@ export class WorldManager {
 
   public async loadVehicleModels() {
     this.realisticBuilder.trunkBlocked = (x, z, r) => this.isTrunkBlocked(x, z, r);
+    await this.stage('Loading cars, trucks and buses…');
     await this.realisticBuilder.buildVehicles();
+    await this.stage('Loading people…');
     await this.realisticBuilder.buildPedestrians();
     this.vehicles = this.realisticBuilder.getDriveableVehicles();
   }
