@@ -42,3 +42,8 @@ yarn-error.*
 
 # leftover base64 assets (now bundled as assets/bin)
 src/assets/
+
+# crash reports pulled from a phone (may contain data from other apps)
+crashlogs/
+build-emu/
+Error.jpeg
