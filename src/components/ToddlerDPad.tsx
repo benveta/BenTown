@@ -1,5 +1,5 @@
-import React, { useRef } from 'react';
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { GestureResponderEvent, HostInstance, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 interface ToddlerDPadProps {
@@ -46,7 +46,75 @@ export const ToddlerDPad: React.FC<ToddlerDPadProps> = ({ onMove, onRelease }) =
     publishMovement();
   };
 
+  // --- Multi-touch (phones) ---------------------------------------------------------------
+  // React Native's Pressable uses the single "responder" system: only ONE button can be pressed at a
+  // time, so Forward + Left never worked together. On phones the buttons are plain views and the raw
+  // touch events (which report every finger) are hit-tested against each button instead.
+  const [pressedDirections, setPressedDirections] = useState<Set<Direction>>(new Set());
+  const buttonRefs = useRef<Partial<Record<Direction, HostInstance | null>>>({});
+  const rects = useRef<Partial<Record<Direction, { x: number; y: number; w: number; h: number }>>>({});
+  const lastKey = useRef('');
+
+  const measureButtons = () => {
+    (Object.keys(DIRECTIONS) as Direction[]).forEach((direction) => {
+      buttonRefs.current[direction]?.measureInWindow((x, y, w, h) => {
+        rects.current[direction] = { x, y, w, h };
+      });
+    });
+  };
+
+  const handleTouches = (event: GestureResponderEvent) => {
+    const slop = 10; // a little forgiveness around each button for small fingers
+    const held = new Set<Direction>();
+    for (const touch of event.nativeEvent.touches) {
+      (Object.keys(DIRECTIONS) as Direction[]).forEach((direction) => {
+        const rect = rects.current[direction];
+        if (!rect) return;
+        if (touch.pageX >= rect.x - slop && touch.pageX <= rect.x + rect.w + slop
+          && touch.pageY >= rect.y - slop && touch.pageY <= rect.y + rect.h + slop) {
+          held.add(direction);
+        }
+      });
+    }
+    const key = [...held].sort().join(',');
+    if (key === lastKey.current) return;
+    lastKey.current = key;
+    heldDirections.current = held;
+    setPressedDirections(held);
+    publishMovement();
+  };
+
+  // Phones always use raw touches; `?rawtouch` lets the web build exercise the same code path for testing.
+  const useRawTouch = Platform.OS !== 'web' || (typeof window !== 'undefined' && /rawtouch/.test(window.location?.search ?? ''));
+  const touchHandlers = !useRawTouch ? {} : {
+    onTouchStart: handleTouches,
+    onTouchMove: handleTouches,
+    onTouchEnd: handleTouches,
+    onTouchCancel: handleTouches,
+  };
+
   const renderButton = (direction: Direction) => {
+    if (useRawTouch) {
+      const control = DIRECTIONS[direction];
+      return (
+        <View
+          key={direction}
+          ref={(node) => { buttonRefs.current[direction] = node; }}
+          onLayout={measureButtons}
+          accessibilityRole="button"
+          accessibilityLabel={control.label}
+          style={[
+            styles.button,
+            { width: buttonSize, height: buttonSize },
+            pressedDirections.has(direction) && styles.buttonPressed,
+          ]}
+        >
+          <Ionicons name={control.icon} size={32} color="#f7f3e8" />
+          <Text style={styles.buttonLabel}>{control.label}</Text>
+        </View>
+      );
+    }
+
     const control = DIRECTIONS[direction];
     return (
       <Pressable
@@ -69,11 +137,11 @@ export const ToddlerDPad: React.FC<ToddlerDPadProps> = ({ onMove, onRelease }) =
 
   return (
     <View style={styles.overlay} pointerEvents="box-none">
-      <View style={[styles.leftControls, { left: width < 500 ? 132 : width < 900 ? 144 : 156 }]} pointerEvents="box-none">
+      <View style={[styles.leftControls, { left: width < 500 ? 132 : width < 900 ? 144 : 156 }]} pointerEvents="box-none" {...touchHandlers}>
         {renderButton('left')}
         {renderButton('right')}
       </View>
-      <View style={[styles.rightControls, { right: width < 500 ? 24 : width < 900 ? 128 : 160, bottom: width < 500 ? 108 : 20 }]} pointerEvents="box-none">
+      <View style={[styles.rightControls, { right: width < 500 ? 24 : width < 900 ? 128 : 160, bottom: width < 500 ? 108 : 20 }]} pointerEvents="box-none" {...touchHandlers}>
         {renderButton('forward')}
         {renderButton('backward')}
       </View>

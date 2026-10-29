@@ -312,6 +312,19 @@ export const GameScreen: React.FC = () => {
         </Pressable>
       )}
 
+      {/* Exit button lives top-right, under Auto Drive, so it can never sit on top of the driving controls. */}
+      {isDriving && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Exit vehicle"
+          onPress={() => engineRef.current?.exitVehicle()}
+          style={({ pressed }) => [styles.autoDriveButton, styles.exitVehicleButton, pressed && styles.autoDriveButtonPressed]}
+        >
+          <Ionicons name="log-out-outline" size={19} color="#f2cc79" />
+          <Text style={styles.autoDriveLabel}>EXIT VEHICLE</Text>
+        </Pressable>
+      )}
+
       <MiniMapHUD x={mapPosition.x} z={mapPosition.z} heading={mapPosition.heading} />
 
       {/* Toddler Visual Learning HUD Card */}
@@ -422,6 +435,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 6,
+  },
+  exitVehicleButton: {
+    top: 178,
   },
   autoDriveButton: {
     position: 'absolute',

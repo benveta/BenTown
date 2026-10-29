@@ -99,18 +99,7 @@ export const ActionButton: React.FC<ActionButtonProps> = ({
 
   return (
     <View style={styles.container} pointerEvents="box-none">
-      {/* If driving, show Exit Vehicle button */}
-      {isDriving && onExitVehicle && (
-        <TouchableOpacity
-          style={styles.exitBtn}
-          activeOpacity={0.8}
-          onPress={onExitVehicle}
-        >
-          <Ionicons name="log-out-outline" size={17} color="#f3d18c" />
-          <Text style={styles.exitText}>EXIT VEHICLE</Text>
-        </TouchableOpacity>
-      )}
-
+      {/* The Exit Vehicle button is drawn by GameScreen (top-right) so it never overlaps the D-pad. */}
       {!isDriving && target && (
         <View style={[styles.targetHint, {
           position: 'absolute',
