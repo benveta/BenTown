@@ -38,6 +38,13 @@ export class GameEngine {
   private lastTime: number = 0;
   private isRunning: boolean = false;
   private frameCount = 0;
+  private lastShadowUpdate = 0;
+  // Automatic quality governor (see adaptQuality): never raises quality again once lowered.
+  private shadowIntervalMs = 110;
+  private frameTimeMs = 16;
+  private qualityLevel = 0;
+  private startedAt = 0;
+  private lastQualityCheck = 0;
 
   // Inputs
   public joystickVector: { x: number; y: number } | null = null;
@@ -182,6 +189,7 @@ export class GameEngine {
 
   public start() {
     this.isRunning = true;
+    this.startedAt = performance.now();
     audio.startBGM();
     this.lastTime = performance.now();
     this.loop(this.lastTime);
@@ -582,7 +590,9 @@ export class GameEngine {
   private loop = (currentTime: number) => {
     if (!this.isRunning) return;
 
-    const delta = Math.min((currentTime - this.lastTime) / 1000, 0.1);
+    const rawDelta = (currentTime - this.lastTime) / 1000;
+    // Never negative (timestamps can jump backwards after a pause) and never huge (after a stall).
+    const delta = Math.max(0, Math.min(rawDelta, 0.1));
     this.lastTime = currentTime;
 
     // 1. Update Movement
@@ -610,7 +620,12 @@ export class GameEngine {
     // 2. Update World
     if (this.world) {
       this.world.update(delta, playerPos);
-      if ((this.frameCount++ & 1) === 0) this.renderer.shadowMap.needsUpdate = true;
+      // The shadow pass redraws every shadow caster, which is expensive on a phone: refresh about 9x per second.
+      const now = performance.now();
+      if (now - this.lastShadowUpdate > this.shadowIntervalMs) {
+        this.lastShadowUpdate = now;
+        this.renderer.shadowMap.needsUpdate = true;
+      }
     }
 
     // 3. Check Musical Stepping Stones
@@ -648,6 +663,7 @@ export class GameEngine {
     this.updateCamera(playerPos, delta);
 
     // 7. Render & Present Buffer
+    this.adaptQuality(rawDelta);
     this.renderer.render(this.scene, this.camera);
     this.gl.endFrameEXP();
 
@@ -766,7 +782,8 @@ export class GameEngine {
     const halfWidth = vh.halfExtents?.x ?? 0.74;
     const rightX = forwardZ;
     const rightZ = -forwardX;
-    const blocked = [-1, 1].some((lengthSide) => [-1, 1].some((widthSide) =>
+    // Solid obstacles (buildings, tree trunks, other vehicles) at the vehicle's corners.
+    const solid = [-1, 1].some((lengthSide) => [-1, 1].some((widthSide) =>
       this.world.isPositionBlocked(
         nextX + forwardX * halfLength * lengthSide + rightX * halfWidth * widthSide,
         nextZ + forwardZ * halfLength * lengthSide + rightZ * halfWidth * widthSide,
@@ -774,17 +791,18 @@ export class GameEngine {
         vh.group
       )
     ));
+    // A person only matters when they are in front of the vehicle in the direction it is going
+    // (someone standing beside it must not stop it). The vehicle waits; it never backs up for a person.
+    const direction = vh.speed !== 0 ? Math.sign(vh.speed) : Math.sign(throttle || 1);
+    const personAhead = [-1, 0, 1].some((side) => this.world.isPersonAt(
+      nextX + forwardX * direction * (halfLength + 0.8) + rightX * halfWidth * side,
+      nextZ + forwardZ * direction * (halfLength + 0.8) + rightZ * halfWidth * side,
+      0.25
+    ));
+    const blocked = solid || personAhead;
 
     if (blocked) {
       vh.speed = THREE.MathUtils.lerp(vh.speed, 0, delta * 8);
-      // Only a solid obstacle (not a walking person) triggers the back-up.
-      const solid = [-1, 1].some((lengthSide) => [-1, 1].some((widthSide) =>
-        this.world.isPositionBlocked(
-          nextX + forwardX * halfLength * lengthSide + rightX * halfWidth * widthSide,
-          nextZ + forwardZ * halfLength * lengthSide + rightZ * halfWidth * widthSide,
-          0.18
-        ) && !this.world.isPositionBlocked(vh.group.position.x, vh.group.position.z, 0.1, vh.group)
-      ));
       if (!solid) { this.blockedTime = 0; vh.group.rotation.y = vh.steerAngle; return; }
       // Pushing into something for a moment (or crashing at speed) triggers the automatic back-up.
       if (Math.abs(throttle) > 0.05 || Math.abs(vh.speed) > 1) this.blockedTime += delta;
@@ -810,6 +828,34 @@ export class GameEngine {
 
     vh.group.position.x = Math.max(-200, Math.min(200, vh.group.position.x));
     vh.group.position.z = Math.max(-200, Math.min(200, vh.group.position.z));
+  }
+
+  /**
+   * Keeps the game smooth on slower phones. If the average frame time stays above ~33 ms (under 30 fps)
+   * for a couple of seconds, step down: 1) refresh shadows far less often, 2) turn shadows off.
+   * Skipped during the first seconds (shader compilation hitches) and never steps back up.
+   */
+  private adaptQuality(deltaSeconds: number) {
+    // A gap this long is a pause (app in the background, a throttled tab, a one-off hitch), not slowness.
+    if (deltaSeconds > 0.5) return;
+    this.frameTimeMs += (deltaSeconds * 1000 - this.frameTimeMs) * 0.05;
+    const now = performance.now();
+    if (now - this.startedAt < 6000 || now - this.lastQualityCheck < 2500 || this.qualityLevel >= 2) return;
+    this.lastQualityCheck = now;
+    if (this.frameTimeMs <= 33) return;
+    this.qualityLevel += 1;
+    if (this.qualityLevel === 1) {
+      this.shadowIntervalMs = 400;
+    } else {
+      this.renderer.shadowMap.enabled = false;
+      // Materials were compiled with the shadow code; rebuild them without it.
+      this.scene.traverse((object) => {
+        const mesh = object as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach((material) => { material.needsUpdate = true; });
+      });
+    }
+    console.log(`[perf] frame time ${this.frameTimeMs.toFixed(1)} ms -> quality level ${this.qualityLevel}`);
   }
 
   private updateCamera(targetPos: THREE.Vector3, delta: number) {

@@ -52,7 +52,6 @@ export class CityPedestrianLoader {
       if (object instanceof THREE.Mesh) {
         object.castShadow = true;
         object.receiveShadow = true;
-        object.frustumCulled = false; // skinned bounds are rest-pose; avoid pop-out
       }
     });
 

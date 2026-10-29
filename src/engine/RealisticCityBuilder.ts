@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { Platform } from 'react-native';
 import { loadBinaryAsset } from './BinaryAsset';
 import { FACADE_FILES, TEXTURE_FILES } from './binAssets';
 import { VehicleModelLoader, VehicleModelKey } from './VehicleModelLoader';
@@ -39,7 +41,8 @@ export interface CityShop {
 }
 
 const PHOTO_CITY_TEXTURE_SIZE = 512;
-const SHADOW_MAP_SIZE = 2048;
+// A smaller shadow map on phones: sharper than needed for a 92 m wide shadow area on a small screen.
+const SHADOW_MAP_SIZE = Platform.OS === 'web' ? 2048 : 1536;
 const SKY_TINTS: Record<CityBackdropZone, number> = { city: 0xffffff, dusk: 0xb99cc4, mountain: 0xe6f1ff, fuelStop: 0xffd2b0 };
 const FACADE_TILE_METERS = 7;
 const LANE_OFFSET = 2.2;
@@ -141,6 +144,7 @@ export class RealisticCityBuilder {
   }
 
   public build() {
+    const preexisting = new Set<THREE.Object3D>(this.scene.children);
     this.buildAtmosphere();
     this.buildGround();
     this.buildRoadNetwork();
@@ -152,6 +156,7 @@ export class RealisticCityBuilder {
     this.buildMountainPass();
     this.buildNightDistrict();
     this.buildStreetFurniture();
+    this.mergeStaticMeshes(preexisting);
     return { collisionBoxes: this.collisions, vehicles: this.vehicles };
   }
 
@@ -302,6 +307,73 @@ export class RealisticCityBuilder {
       if (clear(px, pz)) return [px, position[1], pz];
     }
     return position;
+  }
+
+
+  /**
+   * Performance: the city is built from thousands of small meshes. Every mesh costs JavaScript time
+   * on every frame (matrix updates, culling, state changes, shadow pass), which is what makes a phone
+   * lag. Static, opaque, single-material meshes are merged per material and 40 m map cell into a few
+   * hundred larger meshes; tiny ones stop casting shadows. Looks identical, far less per-frame work.
+   */
+  private mergeStaticMeshes(preexisting: Set<THREE.Object3D>) {
+    const CELL = 40;
+    this.scene.updateMatrixWorld(true);
+    // Everything the builder added to the scene (including meshes inside prop groups) is static scenery,
+    // except the sky dome which follows the player.
+    const candidates: THREE.Mesh[] = [];
+    const roots = this.scene.children.filter((child) => !preexisting.has(child) && child !== this.skyDome);
+    roots.forEach((rootObject) => rootObject.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (mesh.isMesh && !(mesh as THREE.InstancedMesh).isInstancedMesh && !(mesh as THREE.SkinnedMesh).isSkinnedMesh) candidates.push(mesh);
+    }));
+    type Group = { material: THREE.Material; cast: boolean; receive: boolean; geometries: THREE.BufferGeometry[]; meshes: THREE.Mesh[] };
+    const groups = new Map<string, Group>();
+    const position = new THREE.Vector3();
+    for (const mesh of candidates) {
+      const material = mesh.material;
+      if (!mesh.parent || Array.isArray(material) || material.transparent || !mesh.visible || mesh.renderOrder !== 0) continue;
+      const geometry = mesh.geometry;
+      if (!geometry.attributes.position || !geometry.attributes.normal || !geometry.attributes.uv) continue;
+      geometry.computeBoundingSphere();
+      const scale = Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z);
+      const cast = mesh.castShadow && (geometry.boundingSphere?.radius ?? 0) * scale > 0.6;
+      mesh.getWorldPosition(position);
+      const key = [material.uuid, cast, mesh.receiveShadow, Math.floor(position.x / CELL), Math.floor(position.z / CELL), geometry.index ? 'i' : 'n'].join('|');
+      let group = groups.get(key);
+      if (!group) {
+        group = { material, cast, receive: mesh.receiveShadow, geometries: [], meshes: [] };
+        groups.set(key, group);
+      }
+      const copy = geometry.clone();
+      for (const name of Object.keys(copy.attributes)) {
+        if (name !== 'position' && name !== 'normal' && name !== 'uv') copy.deleteAttribute(name);
+      }
+      copy.applyMatrix4(mesh.matrixWorld);
+      group.geometries.push(copy);
+      group.meshes.push(mesh);
+    }
+    let before = 0;
+    let after = 0;
+    groups.forEach((group) => {
+      before += group.meshes.length;
+      if (group.geometries.length < 2) { after += group.meshes.length; group.geometries.forEach((g) => g.dispose()); return; }
+      const merged = mergeGeometries(group.geometries, false);
+      group.geometries.forEach((g) => g.dispose());
+      if (!merged) { after += group.meshes.length; return; }
+      const mesh = new THREE.Mesh(merged, group.material);
+      mesh.castShadow = group.cast;
+      mesh.receiveShadow = group.receive;
+      mesh.matrixAutoUpdate = false; // never moves
+      mesh.name = 'merged-static';
+      this.scene.add(mesh);
+      group.meshes.forEach((original) => { original.parent?.remove(original); original.geometry.dispose(); });
+      after += 1;
+    });
+    // Drop prop groups that are now empty.
+    roots.forEach((rootObject) => { if (rootObject.children.length === 0 && !(rootObject as THREE.Mesh).isMesh && !(rootObject as THREE.Light).isLight && rootObject !== this.sunLight.target) this.scene.remove(rootObject); });
+    this.staticMeshes.length = 0;
+    console.log(`[perf] merged ${before} static meshes into ${after}`);
   }
 
   private measure(group: THREE.Group) {
@@ -476,10 +548,24 @@ export class RealisticCityBuilder {
       this.sunLight.position.set(sx + SUN_OFFSET.x, SUN_OFFSET.y, sz + SUN_OFFSET.z);
     }
     this.traffic.forEach((car) => this.updateTrafficCar(car, delta, playerPos));
+    // Vehicles far from the player are detached from the scene (they keep their position and still move).
+    if (playerPos) {
+      for (const vehicle of this.vehicles) {
+        if (vehicle.active || vehicle.group.userData.playerDriven) continue;
+        const far = vehicle.group.position.distanceToSquared(playerPos) > 120 * 120;
+        if (far && vehicle.group.parent) this.scene.remove(vehicle.group);
+        else if (!far && !vehicle.group.parent) this.scene.add(vehicle.group);
+      }
+    }
     this.pedestrians.forEach((pedestrian) => {
       // Keep animations smooth near the player while avoiding dozens of
       // off-screen skeleton updates on mobile devices.
-      const nearPlayer = !playerPos || pedestrian.group.position.distanceToSquared(playerPos) < 78 * 78;
+      const distanceSquared = playerPos ? pedestrian.group.position.distanceToSquared(playerPos) : 0;
+      // Walkers beyond ~65 m are taken out of the scene and not animated. Each carries ~70 bones, and
+      // even hidden objects cost matrix updates every frame, so detaching them saves real CPU time.
+      const nearPlayer = distanceSquared < 65 * 65;
+      if (nearPlayer && !pedestrian.group.parent) this.scene.add(pedestrian.group);
+      else if (!nearPlayer && pedestrian.group.parent) this.scene.remove(pedestrian.group);
       if (nearPlayer) pedestrian.mixer.update(delta);
       if (pedestrian.greetingTimer > 0) {
         pedestrian.greetingTimer = Math.max(0, pedestrian.greetingTimer - delta);
@@ -493,10 +579,26 @@ export class RealisticCityBuilder {
       // Pause for vehicles (at crossings) or the player right in front.
       const ahead = pedestrian.group.position.clone();
       ahead[pedestrian.axis] += pedestrian.direction * 1.4;
-      const waiting = this.isBlockedByVehicle(ahead.x, ahead.z, 0.5)
-        || (!!playerPos && Math.hypot(ahead.x - playerPos.x, ahead.z - playerPos.z) < 0.9);
+      const insideVehicle = this.isBlockedByVehicle(pedestrian.group.position.x, pedestrian.group.position.z, 0.1);
+      const vehicleAhead = !insideVehicle && this.isBlockedByVehicle(ahead.x, ahead.z, 0.5);
+      const personAhead = !!playerPos && Math.hypot(ahead.x - playerPos.x, ahead.z - playerPos.z) < 0.9;
+      const waiting = vehicleAhead || personAhead;
       pedestrian.walkAction.paused = waiting;
-      if (waiting) return;
+      if (waiting) {
+        // A walker never waits for ever: if a vehicle stays in the way (a parked car on its route, a
+        // vehicle waiting for it) it turns around - otherwise the pair would block each other.
+        const waited = (this.pedestrianWait.get(pedestrian.id) ?? 0) + delta;
+        if (vehicleAhead && waited > 1.2) {
+          this.pedestrianWait.set(pedestrian.id, 0);
+          pedestrian.direction = pedestrian.direction === 1 ? -1 : 1;
+          pedestrian.group.rotation.y += Math.PI;
+          pedestrian.walkAction.paused = false;
+        } else {
+          this.pedestrianWait.set(pedestrian.id, waited);
+        }
+        return;
+      }
+      this.pedestrianWait.set(pedestrian.id, 0);
       pedestrian.group.position[pedestrian.axis] += pedestrian.direction * pedestrian.speed * delta;
       // Turn around at either end of the patrol. The position is clamped so a walker can never
       // stay out of range and flip direction every frame.
@@ -584,8 +686,19 @@ export class RealisticCityBuilder {
     return texture;
   }
 
+  // Identical materials are shared (fewer uniform uploads and state changes, and meshes can be merged).
+  private readonly materialCache = new Map<string, THREE.MeshStandardMaterial>();
+  private readonly staticMeshes: THREE.Mesh[] = [];
+  private readonly pedestrianWait = new Map<string, number>();
+
   private material(color: number, roughness = 0.85, metalness = 0) {
-    return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+    const key = `${color}|${roughness}|${metalness}`;
+    let material = this.materialCache.get(key);
+    if (!material) {
+      material = new THREE.MeshStandardMaterial({ color, roughness, metalness });
+      this.materialCache.set(key, material);
+    }
+    return material;
   }
 
   private addMesh<T extends THREE.BufferGeometry>(geometry: T, material: THREE.Material | THREE.Material[], position: THREE.Vector3) {
@@ -594,6 +707,7 @@ export class RealisticCityBuilder {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.scene.add(mesh);
+    this.staticMeshes.push(mesh);
     return mesh;
   }
 

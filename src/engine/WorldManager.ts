@@ -103,6 +103,10 @@ export class WorldManager {
     this.bearGroup = this.createOffMapGroup();
   }
 
+  public isPersonAt(x: number, z: number, radius: number) {
+    return this.realisticBuilder.isBlockedByPedestrian(x, z, radius);
+  }
+
   public roadInfoAt(x: number, z: number, preferAxis?: 'x' | 'z') {
     return this.realisticBuilder.roadInfoAt(x, z, preferAxis);
   }
@@ -150,6 +154,15 @@ export class WorldManager {
       x + radius > box.min.x && x - radius < box.max.x && z + radius > box.min.z && z - radius < box.max.z);
   }
 
+  /** Buildings, tree trunks and other vehicles - but not people: a person only makes a vehicle wait, not back up. */
+  public isSolidBlocked(x: number, z: number, radius: number, ignore?: THREE.Object3D | null): boolean {
+    const overlaps = (box: THREE.Box3) =>
+      x + radius > box.min.x && x - radius < box.max.x && z + radius > box.min.z && z - radius < box.max.z;
+    return this.fixedCollisionBoxes.some(overlaps)
+      || this.isTrunkBlocked(x, z, radius)
+      || this.realisticBuilder.isBlockedByVehicle(x, z, radius, ignore);
+  }
+
   private isTrunkBlocked(x: number, z: number, radius: number) {
     const cx = Math.floor(x / 8);
     const cz = Math.floor(z / 8);
@@ -173,9 +186,7 @@ export class WorldManager {
     return (this.cityGen?.isPositionBlocked(x, z, radius) ?? false)
       || this.fixedCollisionBoxes.some(overlaps)
       || this.isTrunkBlocked(x, z, radius)
-      || this.realisticBuilder.isBlockedByVehicle(x, z, radius, ignore)
-      // A driven vehicle (ignore is set) also stops for pedestrians.
-      || (!!ignore && this.realisticBuilder.isBlockedByPedestrian(x, z, radius));
+      || this.realisticBuilder.isBlockedByVehicle(x, z, radius, ignore);
   }
 
   public findNearestWalkablePosition(position: THREE.Vector3, searchRadius: number = 6): THREE.Vector3 {
