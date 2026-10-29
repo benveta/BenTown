@@ -95,15 +95,35 @@ export class GameEngine {
     } as unknown as HTMLCanvasElement;
     const canvas: HTMLCanvasElement = !simulateNoDocument && this.gl.canvas ? this.gl.canvas : canvasStandIn;
 
-    this.renderer = new THREE.WebGLRenderer({
-      canvas,
-      context: this.gl,
-      // Phone screens are ~460 ppi: MSAA at full native resolution costs a lot
-      // of fill rate for almost no visible gain, so only enable it on
-      // lower-density / desktop surfaces.
-      antialias: Math.max(width, height) < 1900,
-      powerPreference: 'high-performance',
-    });
+    // three.js (r163+) rejects any context that is `instanceof WebGLRenderingContext` as "WebGL 1".
+    // expo-gl 58's native contexts match that global even though they are real WebGL 2 contexts
+    // (expo/expo#51543; the upstream fix, PR #51572, is merged but not in a release yet). Workaround
+    // from that thread: hide the global only while three.js builds the renderer, and only for a context
+    // that expo-gl says is WebGL 2 - a WebGL 1 context is still refused. Browsers never need this.
+    // `?nodoc` reproduces the device environment in a browser; add `&nofix` to see the original error.
+    const globals = globalThis as { WebGLRenderingContext?: unknown };
+    const savedWebGLRenderingContext = globals.WebGLRenderingContext;
+    const query = typeof window !== 'undefined' ? window.location?.search ?? '' : '';
+    if (simulateNoDocument) {
+      globals.WebGLRenderingContext = class { static [Symbol.hasInstance]() { return true; } };
+    }
+    const isWebGL2 = this.gl.supportsWebGL2 === true || simulateNoDocument;
+    if (isWebGL2 && !(simulateNoDocument && /nofix/.test(query))) {
+      globals.WebGLRenderingContext = undefined;
+    }
+    try {
+      this.renderer = new THREE.WebGLRenderer({
+        canvas,
+        context: this.gl,
+        // Phone screens are ~460 ppi: MSAA at full native resolution costs a lot
+        // of fill rate for almost no visible gain, so only enable it on
+        // lower-density / desktop surfaces.
+        antialias: Math.max(width, height) < 1900,
+        powerPreference: 'high-performance',
+      });
+    } finally {
+      globals.WebGLRenderingContext = savedWebGLRenderingContext;
+    }
     // Expo GL already exposes a device-pixel drawing buffer; scaling it again
     // with devicePixelRatio can render outside the actual framebuffer.
     this.renderer.setPixelRatio(1);
