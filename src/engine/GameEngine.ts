@@ -69,7 +69,34 @@ export class GameEngine {
     const height = this.gl.drawingBufferHeight;
 
     // 1. Renderer
+    // React Native has no `document`, and three.js creates its own canvas with
+    // `document.createElementNS` unless it is given one - which threw before anything rendered
+    // and left the loading card spinning forever. Give it a minimal stand-in wrapping the GL
+    // context. (Open the web build with ?nodoc to test this path in a browser.)
+    const simulateNoDocument = __DEV__ && typeof window !== 'undefined' && /nodoc/.test(window.location?.search ?? '');
+    if (simulateNoDocument) {
+      // Block only what three.js would do on a device (an XHTML <canvas>); leave the browser's own page building alone.
+      const originalCreateElementNS = document.createElementNS.bind(document);
+      document.createElementNS = ((namespace: string, name: string) => {
+        if (namespace === 'http://www.w3.org/1999/xhtml' && name === 'canvas') throw new Error('document is not available (simulated)');
+        return originalCreateElementNS(namespace, name);
+      }) as typeof document.createElementNS;
+    }
+    const canvasStandIn = {
+      width,
+      height,
+      clientWidth: width,
+      clientHeight: height,
+      style: {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      setAttribute: () => {},
+      getContext: () => this.gl,
+    } as unknown as HTMLCanvasElement;
+    const canvas: HTMLCanvasElement = !simulateNoDocument && this.gl.canvas ? this.gl.canvas : canvasStandIn;
+
     this.renderer = new THREE.WebGLRenderer({
+      canvas,
       context: this.gl,
       // Phone screens are ~460 ppi: MSAA at full native resolution costs a lot
       // of fill rate for almost no visible gain, so only enable it on

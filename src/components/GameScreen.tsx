@@ -106,7 +106,17 @@ export const GameScreen: React.FC = () => {
   }, [isWorldReady]);
 
   const onContextCreate = async (gl: ExpoWebGLRenderingContext) => {
-    const engine = new GameEngine(gl, customization);
+    loadStageRef.current = 'creating the 3D view';
+    setLoadStage('Starting the 3D view…');
+    let engine: GameEngine;
+    try {
+      engine = new GameEngine(gl, customization);
+    } catch (error) {
+      // Previously an error here was swallowed and the loading card spun forever.
+      console.error('[GameScreen] Could not create the 3D view:', error);
+      setWorldError(`creating the 3D view: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     engineRef.current = engine;
     // Dev-only handle so scripted end-to-end checks can inspect the live game.
     if (__DEV__) (globalThis as { __bentown?: GameEngine }).__bentown = engine;
